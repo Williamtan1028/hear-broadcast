@@ -1,0 +1,9 @@
+# docker compose up -d --build 後開啟 http://localhost:8080
+# 注意：手機要用麥克風必須是 HTTPS（localhost 例外），請在前面加上反向代理（見 README）。
+services:
+  web:
+    build: .
+    image: hear-broadcast:latest
+    ports:
+      - '8080:80'
+    restart: unless-stopped

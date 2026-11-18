@@ -9,6 +9,8 @@ const wav = resolve('e2e/fixtures/broadcast.wav');
 writeFileSync(wav, makeE2eWav());
 
 const PORT = 4174;
+/** 正式建置（含 Service Worker）的預覽伺服器，用於離線測試 */
+const PREVIEW_PORT = 4175;
 
 export default defineConfig({
   testDir: 'e2e',
@@ -22,6 +24,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: /offline/,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -34,11 +37,24 @@ export default defineConfig({
         },
       },
     },
+    {
+      name: 'pwa-offline',
+      testMatch: /offline/,
+      use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${PREVIEW_PORT}` },
+    },
   ],
-  webServer: {
-    command: `npx vite --port ${PORT} --strictPort`,
-    port: PORT,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: `npx vite --port ${PORT} --strictPort`,
+      port: PORT,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      command: `npx vite build && npx vite preview --port ${PREVIEW_PORT} --strictPort`,
+      port: PREVIEW_PORT,
+      reuseExistingServer: !process.env.CI,
+      timeout: 180_000,
+    },
+  ],
 });

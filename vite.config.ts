@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // 部署到 GitHub Pages 時 base 是 /hear-broadcast/；Docker 與本機用 /。以 VITE_BASE 覆寫。
@@ -10,6 +11,8 @@ export default defineConfig(({ mode }) => {
     base,
     plugins: [
       react(),
+      // npm run dev:https：自簽憑證，讓同一個區網的手機也能用麥克風（瀏覽器需按「繼續前往」）
+      ...(mode === 'https' ? [basicSsl()] : []),
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg'],
@@ -45,7 +48,7 @@ export default defineConfig(({ mode }) => {
         },
       }),
     ],
-    server: { host: env.VITE_HOST === '1' ? true : undefined },
+    server: { host: mode === 'https' ? true : undefined },
     worker: { format: 'es' },
   };
 });

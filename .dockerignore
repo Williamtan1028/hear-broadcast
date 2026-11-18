@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+test-results
+playwright-report
+bench/out
+e2e/fixtures
+.git
+.claude

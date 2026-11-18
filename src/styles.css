@@ -1,0 +1,470 @@
+:root {
+  --bg: #f4f6fa;
+  --card: #ffffff;
+  --ink: #0b1220;
+  --muted: #4a5568;
+  --line: #c9d1de;
+  --brand: #0b3d91;
+  --brand-ink: #ffffff;
+  --accent: #ffd400;
+  --ok: #0a7d32;
+  --warn-bg: #fff4c2;
+  --warn-ink: #5c4500;
+  --danger: #c00018;
+  --led: #ffb21e;
+  --focus: #1f6feb;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1220;
+    --card: #131c2e;
+    --ink: #f2f5fa;
+    --muted: #b6c0d0;
+    --line: #2c3a55;
+    --brand: #3d7bff;
+    --warn-bg: #3d3200;
+    --warn-ink: #ffe680;
+    --ok: #4bd17a;
+    --danger: #ff4d5e;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'Noto Sans TC',
+    'PingFang TC',
+    'Microsoft JhengHei',
+    sans-serif;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+a {
+  color: var(--brand);
+}
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.skip {
+  position: absolute;
+  left: -999px;
+}
+.skip:focus {
+  left: 8px;
+  top: 8px;
+  z-index: 20;
+  background: var(--card);
+  padding: 8px;
+}
+
+header.top {
+  background: var(--brand);
+  color: var(--brand-ink);
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+header.top a {
+  color: inherit;
+  text-decoration: none;
+}
+header.top .logo {
+  font-weight: 800;
+  font-size: 20px;
+  margin-right: auto;
+}
+header.top nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+header.top nav a {
+  padding: 10px 12px;
+  border-radius: 8px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+header.top nav a[aria-current='page'] {
+  background: rgba(255, 255, 255, 0.18);
+  font-weight: 700;
+}
+
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 16px 16px 48px;
+}
+h1 {
+  font-size: clamp(24px, 5vw, 32px);
+  margin: 8px 0 12px;
+}
+h2 {
+  font-size: 20px;
+  margin: 0 0 10px;
+}
+h3 {
+  font-size: 17px;
+  margin: 12px 0 6px;
+}
+.muted {
+  color: var(--muted);
+}
+.small {
+  font-size: 14px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.grid {
+  display: grid;
+  gap: 14px;
+}
+@media (min-width: 860px) {
+  .grid.two {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.stack > * + * {
+  margin-top: 10px;
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+}
+textarea {
+  width: 100%;
+  min-height: 80px;
+}
+input[type='range'] {
+  padding: 0;
+  min-width: 160px;
+}
+input[type='checkbox'],
+input[type='radio'] {
+  min-height: 0;
+  width: 22px;
+  height: 22px;
+  accent-color: var(--brand);
+}
+button {
+  cursor: pointer;
+  font-weight: 600;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button.primary {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+}
+button.danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+button.big {
+  font-size: 22px;
+  padding: 16px 28px;
+  min-height: 64px;
+  border-radius: 16px;
+  width: 100%;
+}
+button.pressed,
+button[aria-pressed='true'] {
+  background: var(--brand);
+  color: var(--brand-ink);
+  border-color: var(--brand);
+}
+label.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 600;
+}
+label.field > span.hint {
+  font-weight: 400;
+  font-size: 14px;
+  color: var(--muted);
+}
+label.chk {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+}
+
+.warn {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  border: 2px solid #d4a800;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 600;
+}
+.error {
+  background: color-mix(in srgb, var(--danger) 12%, var(--card));
+  border: 2px solid var(--danger);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+.ok {
+  color: var(--ok);
+  font-weight: 700;
+}
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--line);
+  color: var(--ink);
+}
+.badge.review {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+.badge.emg {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* 狀態列 */
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 15px;
+}
+.status b {
+  font-weight: 700;
+}
+
+/* 字幕看板 */
+.board {
+  background: #050505;
+  color: var(--led);
+  border-radius: 16px;
+  padding: 22px 20px;
+  min-height: 170px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  font-weight: 700;
+  line-height: 1.35;
+  text-shadow: 0 0 12px rgba(255, 178, 30, 0.35);
+  word-break: break-word;
+}
+.board .meta {
+  color: #c9c9c9;
+  font-size: 15px;
+  font-weight: 500;
+  margin-top: 12px;
+  text-shadow: none;
+}
+.board.fs-1 .text {
+  font-size: clamp(22px, 5.4vw, 32px);
+}
+.board.fs-2 .text {
+  font-size: clamp(28px, 7vw, 44px);
+}
+.board.fs-3 .text {
+  font-size: clamp(36px, 9.5vw, 60px);
+}
+.board.flash {
+  animation: arrive 1.2s ease-out;
+}
+@keyframes arrive {
+  0% {
+    box-shadow: 0 0 0 6px var(--accent);
+    transform: scale(1.015);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    transform: none;
+  }
+}
+
+/* 緊急畫面 */
+.emergency {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--danger);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px;
+  text-align: center;
+  animation: emg 1s steps(2, jump-none) infinite;
+}
+.emergency .title {
+  font-size: clamp(30px, 8vw, 56px);
+  font-weight: 900;
+}
+.emergency .text {
+  font-size: clamp(24px, 6.5vw, 44px);
+  font-weight: 800;
+  line-height: 1.3;
+}
+.emergency button {
+  background: #fff;
+  color: var(--danger);
+  border: 0;
+  font-size: 22px;
+  padding: 14px 32px;
+  min-height: 60px;
+}
+@keyframes emg {
+  0% {
+    background: #c00018;
+  }
+  100% {
+    background: #7a0010;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .emergency,
+  .board.flash {
+    animation: none;
+  }
+}
+
+/* 頻道能量柱 */
+.bars {
+  display: flex;
+  gap: 3px;
+  align-items: flex-end;
+  height: 120px;
+  border-bottom: 1px solid var(--line);
+}
+.bars div {
+  flex: 1;
+  background: var(--brand);
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+}
+.bars div.sync {
+  background: #ff8a00;
+}
+
+ol.log,
+ul.log {
+  margin: 0;
+  padding-left: 20px;
+  max-height: 320px;
+  overflow: auto;
+}
+ol.log li,
+ul.log li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  padding: 6px;
+  vertical-align: top;
+}
+.progress {
+  height: 10px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress > div {
+  height: 100%;
+  background: var(--brand);
+}
+
+dialog {
+  border: 0;
+  border-radius: 16px;
+  padding: 20px;
+  max-width: min(520px, 92vw);
+  background: var(--card);
+  color: var(--ink);
+}
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.entries {
+  display: grid;
+  gap: 14px;
+}
+@media (min-width: 760px) {
+  .entries {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.entry {
+  display: block;
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--card);
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  min-height: 120px;
+}
+.entry:hover {
+  border-color: var(--brand);
+}
+.entry strong {
+  font-size: 22px;
+  display: block;
+  margin-bottom: 6px;
+}
+canvas {
+  width: 100%;
+  background: #050a14;
+  border-radius: 10px;
+}

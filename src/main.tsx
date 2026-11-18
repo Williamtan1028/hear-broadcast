@@ -1,11 +1,14 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
+import App from './App.tsx';
+import './styles.css';
+
+// PWA：離線快取網頁與模板資料
+if ('serviceWorker' in navigator && import.meta.env.PROD) registerSW({ immediate: true });
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <main style={{ padding: 16, fontFamily: 'system-ui' }}>
-      <h1>聽見廣播</h1>
-      <p>專案骨架（第 1 階段）：數據機核心位於 src/modem/。</p>
-    </main>
+    <App />
   </StrictMode>,
 );

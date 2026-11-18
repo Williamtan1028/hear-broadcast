@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+coverage
+*.local
+.vite
+test-results
+playwright-report
+e2e/fixtures/*.wav
+bench/out
+.DS_Store
+*.log

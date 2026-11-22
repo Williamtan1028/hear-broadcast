@@ -40,6 +40,9 @@ const zh = {
   manualPlatformLabel: '月台判斷方式',
   autoPlatform: '自動',
   manualPlatform: '手動',
+  listening: '正在接收月台廣播',
+  statusLabel: '接收狀態',
+  advanced: '進階設定與工程數據（頻段、月台判斷方式、同步分數）',
 } as const;
 
 type Dict = {
@@ -84,6 +87,9 @@ const en: Dict = {
   manualPlatformLabel: 'Platform detection',
   autoPlatform: 'Auto',
   manualPlatform: 'Manual',
+  listening: 'Listening for station announcements',
+  statusLabel: 'Receiver status',
+  advanced: 'Advanced (band, platform detection, sync score)',
 };
 
 export type UiDict = Dict;

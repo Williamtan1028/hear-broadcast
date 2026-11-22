@@ -92,6 +92,11 @@ export class CombiningStore<D extends DemodLike = DemodLike> {
     return this.entries.filter((e) => e.d.p < now);
   }
 
+  /** 目前暫存的所有失敗封包（不做過期處理） */
+  all(): FailedEntry<D>[] {
+    return this.entries.slice();
+  }
+
   remove(d: D): void {
     this.entries = this.entries.filter((e) => e.d !== d);
   }

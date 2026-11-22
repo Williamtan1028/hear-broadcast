@@ -5,12 +5,12 @@ import {
   ProtocolError,
   decodeMessage,
   encodeMessage,
+  isNewerPack,
   truncateUtf8,
   utf8Length,
   type Message,
 } from '../src/modem/protocol.ts';
 import { DEFAULTS } from '../src/modem/config.ts';
-import { AUTH_TRAILER_BYTES } from '../src/modem/auth.ts';
 
 const tpl = (o: Partial<Extract<Message, { type: 'template' }>>): Message => ({
   type: 'template',
@@ -55,11 +55,11 @@ describe('協定 v2', () => {
     expect(() => encodeMessage(tpl({ p1: 1.5 }))).toThrow(ProtocolError);
   });
 
-  it('文字長度：最多 38 bytes（預留 6 bytes 防偽尾碼），簽章後的 payload 不超過 maxLen', () => {
-    expect(MAX_TEXT_BYTES).toBe(38);
-    const max = 'a'.repeat(38);
+  it('文字長度：最多 44 bytes，整個 payload 不超過 maxLen', () => {
+    expect(MAX_TEXT_BYTES).toBe(44);
+    const max = 'a'.repeat(44);
     expect(encodeMessage({ type: 'text', stationId: 1, platform: 1, seq: 1, text: max }).length).toBe(
-      DEFAULTS.maxLen - AUTH_TRAILER_BYTES,
+      DEFAULTS.maxLen,
     );
     expect(() => encodeMessage({ type: 'text', stationId: 1, platform: 1, seq: 1, text: max + 'b' })).toThrow(
       ProtocolError,
@@ -67,9 +67,18 @@ describe('協定 v2', () => {
     expect(() => encodeMessage({ type: 'text', stationId: 1, platform: 1, seq: 1, text: '' })).toThrow(
       ProtocolError,
     );
-    // 中文 3 bytes：12 個字 = 36 bytes，第 13 個字會超過 38
-    expect(utf8Length(truncateUtf8('測'.repeat(20)))).toBe(36);
+    // 中文 3 bytes：14 個字 = 42 bytes，第 15 個字會超過 44
+    expect(utf8Length(truncateUtf8('測'.repeat(20)))).toBe(42);
     expect(truncateUtf8('ab測', 4)).toBe('ab');
+  });
+
+  it('packVersion 循環比較：255 之後回到 0 仍判斷為較新', () => {
+    expect(isNewerPack(2, 1)).toBe(true);
+    expect(isNewerPack(1, 1)).toBe(false);
+    expect(isNewerPack(1, 2)).toBe(false);
+    expect(isNewerPack(0, 255)).toBe(true);
+    expect(isNewerPack(3, 250)).toBe(true);
+    expect(isNewerPack(250, 3)).toBe(false);
   });
 
   it('解碼時拒絕錯誤的版本、型別、長度與 UTF-8', () => {

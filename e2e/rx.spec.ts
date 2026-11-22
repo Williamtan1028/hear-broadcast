@@ -33,6 +33,8 @@ test('乘客端：收到廣播、月台篩選、緊急畫面', async ({ page }) 
   await expect(emg).toHaveAttribute('aria-live', 'assertive');
 
   // 第 2 則（第 2 月台，弱訊號）有收到，但因月台判斷為第 1 月台而不顯示
+  // 月台判斷顯示在主畫面（不能藏在折疊的「進階」裡）
+  await expect(page.getByTestId('platform-status')).toBeVisible();
   await expect(page.getByTestId('platform-status')).toContainText('第 1 月台');
   const items = page.getByTestId('history-item');
   await expect(items).toHaveCount(3);

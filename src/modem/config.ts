@@ -92,6 +92,11 @@ export const RX = {
   symWinLenAccum: 0.9,
   /** 分段累積：解碼窗切成幾段各自算功率再相加 */
   accumSegments: 2,
+  /**
+   * 分段累積的窗函數：'whole' = 整窗套 Hann 後再切段（每段是半個 Hann，不對稱）；
+   * 'segment' = 每段各自套 Hann（對稱，旁瓣較低）。依 docs/benchmarks.md 的 A/B 結果選擇。
+   */
+  accumWindow: 'whole' as 'whole' | 'segment',
   /** 精細對齊搜尋範圍（±符號比例） */
   alignRange: 0.25,
   /** 精細對齊步長（秒） */

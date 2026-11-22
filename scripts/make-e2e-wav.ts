@@ -10,7 +10,7 @@ import { makeRng, gauss } from '../bench/channel.ts';
 import { encodeWav } from '../src/audio/signals.ts';
 import { DEFAULTS } from '../src/modem/config.ts';
 import { synthesize } from '../src/modem/fsk.ts';
-import { encodeSignedMessage, type Message } from '../src/modem/protocol.ts';
+import { encodeMessage, type Message } from '../src/modem/protocol.ts';
 
 export const E2E_MESSAGES: { msg: Message; amp: number }[] = [
   {
@@ -54,19 +54,12 @@ export const E2E_MESSAGES: { msg: Message; amp: number }[] = [
   },
 ];
 
-/**
- * 產生測試 WAV。封包附上防偽尾碼（以目前時間簽章，測試需在 ±2 分鐘內執行完畢）；
- * 全站緊急廣播需要兩包才會觸發警報，所以送兩次（同一個 seq）。
- */
-export async function makeE2eWav(): Promise<Uint8Array> {
+export function makeE2eWav(): Uint8Array {
   const fs = 48000;
   const parts: Float32Array[] = [new Float32Array(fs)];
   for (const { msg, amp } of E2E_MESSAGES) {
-    const sig = synthesize(await encodeSignedMessage(msg), DEFAULTS, fs, amp);
-    for (let r = 0; r < (msg.platform === 0 ? 2 : 1); r++) {
-      parts.push(sig);
-      parts.push(new Float32Array(Math.round(fs * 1.5)));
-    }
+    parts.push(synthesize(encodeMessage(msg), DEFAULTS, fs, amp));
+    parts.push(new Float32Array(Math.round(fs * 1.5)));
   }
   parts.push(new Float32Array(fs * 2));
   const n = parts.reduce((s, p) => s + p.length, 0);
@@ -84,6 +77,6 @@ export async function makeE2eWav(): Promise<Uint8Array> {
 
 if (process.argv[1]?.endsWith('make-e2e-wav.ts')) {
   mkdirSync('e2e/fixtures', { recursive: true });
-  writeFileSync('e2e/fixtures/broadcast.wav', await makeE2eWav());
+  writeFileSync('e2e/fixtures/broadcast.wav', makeE2eWav());
   console.log('已產生 e2e/fixtures/broadcast.wav');
 }

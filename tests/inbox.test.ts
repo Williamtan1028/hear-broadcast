@@ -1,6 +1,6 @@
 // 測試 6：月台篩選與去重
 import { describe, expect, it } from 'vitest';
-import { Inbox, type ReceiveMeta } from '../src/features/rx/inbox.ts';
+import { HISTORY_LIMIT, Inbox, type ReceiveMeta } from '../src/features/rx/inbox.ts';
 import type { Message } from '../src/modem/protocol.ts';
 
 const tpl = (platform: number, seq: number, templateId = 3, stationId = 1): Message => ({
@@ -63,6 +63,20 @@ describe('月台篩選與去重', () => {
     expect(inbox.receive(tpl(2, 7), meta(0.7), 7_000).status).toBe('new'); // 不同月台不是重複
     expect(inbox.receive(tpl(1, 7), meta(0.7), 40_000).status).toBe('new');
     expect(inbox.history).toHaveLength(3);
+  });
+
+  it('同一個 seq 但內容不同（兩台站務筆電撞號）不視為重複', () => {
+    const inbox = new Inbox();
+    expect(inbox.receive(tpl(1, 9, 3), meta(0.6), 0).status).toBe('new');
+    expect(inbox.receive(tpl(1, 9, 5), meta(0.6), 2_000).status).toBe('new');
+    expect(inbox.receive(tpl(1, 9, 5), meta(0.6), 6_000).status).toBe('duplicate');
+  });
+
+  it('歷史紀錄有上限', () => {
+    const inbox = new Inbox();
+    for (let i = 0; i < HISTORY_LIMIT + 50; i++)
+      inbox.receive(tpl(1, i % 256, 3 + (i >> 8)), meta(0.6), i * 40_000);
+    expect(inbox.history).toHaveLength(HISTORY_LIMIT);
   });
 
   it('重複的第二次傳送仍納入月台判斷', () => {

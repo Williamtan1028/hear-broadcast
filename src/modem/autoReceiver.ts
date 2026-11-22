@@ -27,6 +27,11 @@ export interface AutoReceiverInit {
   onHop?: (h: HopInfo) => void;
   /** 鎖定設定改變時（null = 掃描中） */
   onLock?: (cfg: ModemConfig | null) => void;
+  /**
+   * 內容驗證：RS 解出的 payload 必須通過才算成功、才會鎖定頻段（例如協定 v2 格式檢查）。
+   * 避免別的聲波裝置或干擾剛好通過 RS 時，讓手機鎖錯頻段 60 秒。
+   */
+  accept?: (payload: Uint8Array) => boolean;
 }
 
 export class AutoReceiver {
@@ -46,6 +51,7 @@ export class AutoReceiver {
   private readonly onEvent: (e: RxEvent) => void;
   private readonly onHop: (h: HopInfo) => void;
   private readonly onLock: (cfg: ModemConfig | null) => void;
+  private readonly accept: ((payload: Uint8Array) => boolean) | null;
   private pending = -1;
   private lastOk = 0;
   private scores: number[] = [];
@@ -63,6 +69,7 @@ export class AutoReceiver {
     this.onEvent = init.onEvent ?? (() => {});
     this.onHop = init.onHop ?? (() => {});
     this.onLock = init.onLock ?? (() => {});
+    this.accept = init.accept ?? null;
     this.buffer = new SampleBuffer(fs);
     this.spectra = new SpectrumCache(this.buffer, fs);
     this.hp = [biquadHighpass(fs, AUTO.highpassHz), biquadHighpass(fs, AUTO.highpassHz)];
@@ -101,7 +108,11 @@ export class AutoReceiver {
     this.onLock(null);
   }
 
-  private handle(i: number, e: RxEvent): void {
+  private handle(i: number, ev: RxEvent): void {
+    let e = ev;
+    if (e.ok && this.accept && !this.accept(e.payload)) {
+      e = { ok: false, error: 'payload 格式不符', stage: 'body', cfg: e.cfg, start: e.start };
+    }
     if (e.ok) {
       this.stats.ok++;
       if (e.combined) this.stats.combined++;

@@ -1,7 +1,8 @@
 /**
  * 乘客端的訊息處理：去重、月台判斷與篩選、車站鎖定。不依賴 React，可直接測試。
  *
- * - 去重：同一組 (stationId, platform, seq) 在 30 秒內只顯示一次（站務端會送兩次）。
+ * - 去重：同一組 (stationId, platform, seq, 內容) 在 30 秒內只顯示一次（站務端會送兩次）。
+ *   比對內容是因為同一站可能有兩台站務筆電，各自的 seq 可能剛好相同。
  * - 月台自動判斷：最近 20 秒內收到的訊息中，訊號品質最高者的月台即「目前所在月台」；
  *   只顯示該月台與全站（platform 0）的廣播。聲音天生帶有位置資訊：離喇叭越近、品質越高。
  * - 全站廣播與緊急廣播一律顯示。
@@ -11,6 +12,12 @@ import type { Message } from '../../modem/protocol.ts';
 
 export const DEDUPE_MS = 30_000;
 export const PLATFORM_WINDOW_MS = 20_000;
+/** 歷史紀錄最多保留幾則（長時間開著時避免無限累積） */
+export const HISTORY_LIMIT = 200;
+
+/** 訊息內容的指紋（去重用） */
+const fingerprint = (m: Message): string =>
+  m.type === 'template' ? `t${m.templateId}:${m.p1}:${m.p2}` : `x${m.text}`;
 
 export interface ReceiveMeta {
   /** 訊號品質（0～1） */
@@ -72,7 +79,7 @@ export class Inbox {
     if (msg.platform > 0) this.obs.push({ platform: msg.platform, quality: meta.quality, at: now });
     this.obs = this.obs.filter((o) => now - o.at <= PLATFORM_WINDOW_MS);
 
-    const key = `${msg.stationId}/${msg.platform}/${msg.seq}`;
+    const key = `${msg.stationId}/${msg.platform}/${msg.seq}/${fingerprint(msg)}`;
     for (const [k, t] of this.seen) if (now - t > DEDUPE_MS) this.seen.delete(k);
     const prev = this.seen.get(key);
     if (prev !== undefined && now - prev <= DEDUPE_MS) return { status: 'duplicate', announcement: null };
@@ -86,6 +93,7 @@ export class Inbox {
       shown: this.isVisible(msg, meta, now),
     };
     this.history.unshift(a);
+    if (this.history.length > HISTORY_LIMIT) this.history.length = HISTORY_LIMIT;
     return { status: 'new', announcement: a };
   }
 

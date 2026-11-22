@@ -1,5 +1,5 @@
 /**
- * 站務端（#/station，筆電）：選模板／輸入文字 → 預覽 → 播放（雙聲道對應月台、佇列、TTS、重送、離線 HMAC 簽章）。
+ * 站務端（#/station，筆電）：選模板／輸入文字 → 預覽 → 播放（雙聲道對應月台、佇列、TTS、重送）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { WithData, type AppData } from '../../app/data.tsx';
@@ -14,16 +14,9 @@ import {
 import type { Route } from '../../audio/signals.ts';
 import { defaultParam, paramChoices, renderTemplate } from '../../data/render.ts';
 import { LANG_LABELS, LANGS, type Station, type Template } from '../../data/schema.ts';
-import { AUTH_TRAILER_BYTES, getAuthKey } from '../../modem/auth.ts';
 import { BANDS, LOW_BAND_F0, SYNTH, makeConfig, type ModeName } from '../../modem/config.ts';
 import { packetDuration } from '../../modem/fsk.ts';
-import {
-  MAX_TEXT_BYTES,
-  encodeMessage,
-  encodeSignedMessage,
-  utf8Length,
-  type Message,
-} from '../../modem/protocol.ts';
+import { MAX_TEXT_BYTES, encodeMessage, utf8Length, type Message } from '../../modem/protocol.ts';
 import { downloadFile, loadSetting, saveSetting } from '../../platform/index.ts';
 import { TemplateSource, TextSource } from '../../services/index.ts';
 
@@ -121,7 +114,6 @@ function StationConsole({ data }: { data: AppData }) {
   const jobMeta = useRef(new Map<number, LogEntry>());
 
   useEffect(() => {
-    void getAuthKey();
     playerRef.current = new BroadcastPlayer(setPlayer, (job, err) => {
       const meta = jobMeta.current.get(job.id);
       if (meta) setLog((l) => [{ ...meta, at: Date.now(), error: err?.message }, ...l].slice(0, 200));
@@ -150,10 +142,10 @@ function StationConsole({ data }: { data: AppData }) {
     return { msg: new TextSource().build({ text: text.trim() }, header), zh: text.trim() };
   }, [tab, tpl, params, text, target, station, data.pack.packVersion]);
 
-  const payloadLen = draft ? encodeMessage(draft.msg).length + AUTH_TRAILER_BYTES : 0;
+  const payloadLen = draft ? encodeMessage(draft.msg).length : 0;
 
-  const makeJob = async (msg: Message, zh: string): Promise<BroadcastJob> => {
-    const payload = await encodeSignedMessage(msg);
+  const makeJob = (msg: Message, zh: string): BroadcastJob => {
+    const payload = encodeMessage(msg);
     return {
       id: newJobId(),
       label: zh,
@@ -187,7 +179,7 @@ function StationConsole({ data }: { data: AppData }) {
     }
     try {
       const full = { ...msg, seq: nextSeq() } as Message;
-      const job = await makeJob(full, zh);
+      const job = makeJob(full, zh);
       jobMeta.current.set(job.id, { at: nowMs(), platform: full.platform, content: zh, seq: full.seq });
       playerRef.current?.enqueue(job);
     } catch (e) {
@@ -224,10 +216,10 @@ function StationConsole({ data }: { data: AppData }) {
     set({ f0 });
   };
 
-  const downloadWav = async () => {
+  const downloadWav = () => {
     if (!draft) return;
     try {
-      const job = await makeJob({ ...draft.msg, seq: 0 } as Message, draft.zh);
+      const job = makeJob({ ...draft.msg, seq: 0 } as Message, draft.zh);
       const wav = renderBroadcastWav(job);
       downloadFile(wav as Uint8Array<ArrayBuffer>, `hear-broadcast-${nowMs()}.wav`, 'audio/wav');
     } catch (e) {
@@ -541,7 +533,7 @@ function StationConsole({ data }: { data: AppData }) {
           </table>
         )}
         <p className="small muted">
-          封包 {payloadLen} bytes（含 6B 防偽驗證）・每次約 {dur.toFixed(2)} 秒・{cfg.f0 / 1000} kHz{' '}
+          封包 {payloadLen} bytes・每次約 {dur.toFixed(2)} 秒・{cfg.f0 / 1000} kHz{' '}
           {s.mode === 'standard' ? '標準' : '穩定'}模式
           {s.repeats === 2 ? '・送 2 次' : ''}
         </p>
@@ -555,7 +547,7 @@ function StationConsole({ data }: { data: AppData }) {
           >
             播放廣播
           </button>
-          <button onClick={() => void downloadWav()} disabled={!draft}>
+          <button onClick={downloadWav} disabled={!draft}>
             下載 WAV（雙聲道）
           </button>
         </div>

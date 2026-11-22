@@ -61,6 +61,7 @@ function sectionOpts(): void {
     ['＋都卜勒（含追蹤）', { ...BASELINE_OPTIONS, doppler: true, tracking: true }],
     ['＋軟判決／抹除', { ...BASELINE_OPTIONS, erasure: true }],
     ['＋頻道白化', { ...BASELINE_OPTIONS, whitening: true }],
+    ['＋分段累積', { ...BASELINE_OPTIONS, accumulation: true }],
     ['預設（全部開啟）', DEFAULT_OPTIONS],
   ];
   for (const ts of [MODES.standard, MODES.stable]) {
@@ -241,7 +242,7 @@ function sectionPerf(): void {
   log('|---|---|---|---|');
   for (const [name, o] of [
     ['baseline（Goertzel，每組 6 頻道）', BASELINE_OPTIONS],
-    ['預設（共用 FFT＋±120 Hz 頻偏搜尋）', DEFAULT_OPTIONS],
+    ['預設（共用 FFT＋±150 Hz 頻偏搜尋）', DEFAULT_OPTIONS],
   ] as const) {
     const cells: string[] = [];
     let ffts = 0;

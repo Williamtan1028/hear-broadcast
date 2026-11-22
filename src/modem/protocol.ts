@@ -14,12 +14,7 @@
  * | 尾碼倒數 6～5 | 2-Byte 分鐘級時間戳記（16-bit） |
  * | 尾碼倒數 4～1 | 4-Byte 截斷式 HMAC-SHA256 防偽指紋 |
  */
-import {
-  AUTH_TRAILER_BYTES,
-  createAuthTrailer,
-  EmergencyAlertGuard,
-  verifyAuthTrailer,
-} from './auth.ts';
+import { AUTH_TRAILER_BYTES, createAuthTrailer, EmergencyAlertGuard, verifyAuthTrailer } from './auth.ts';
 import { DEFAULTS } from './config.ts';
 
 export { EmergencyAlertGuard };

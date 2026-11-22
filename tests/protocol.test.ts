@@ -10,6 +10,7 @@ import {
   type Message,
 } from '../src/modem/protocol.ts';
 import { DEFAULTS } from '../src/modem/config.ts';
+import { AUTH_TRAILER_BYTES } from '../src/modem/auth.ts';
 
 const tpl = (o: Partial<Extract<Message, { type: 'template' }>>): Message => ({
   type: 'template',
@@ -54,11 +55,11 @@ describe('協定 v2', () => {
     expect(() => encodeMessage(tpl({ p1: 1.5 }))).toThrow(ProtocolError);
   });
 
-  it('文字長度：最多 44 bytes，整個 payload 不超過 maxLen', () => {
-    expect(MAX_TEXT_BYTES).toBe(44);
-    const max = 'a'.repeat(44);
+  it('文字長度：最多 38 bytes（預留 6 bytes 防偽尾碼），簽章後的 payload 不超過 maxLen', () => {
+    expect(MAX_TEXT_BYTES).toBe(38);
+    const max = 'a'.repeat(38);
     expect(encodeMessage({ type: 'text', stationId: 1, platform: 1, seq: 1, text: max }).length).toBe(
-      DEFAULTS.maxLen,
+      DEFAULTS.maxLen - AUTH_TRAILER_BYTES,
     );
     expect(() => encodeMessage({ type: 'text', stationId: 1, platform: 1, seq: 1, text: max + 'b' })).toThrow(
       ProtocolError,
@@ -66,8 +67,8 @@ describe('協定 v2', () => {
     expect(() => encodeMessage({ type: 'text', stationId: 1, platform: 1, seq: 1, text: '' })).toThrow(
       ProtocolError,
     );
-    // 中文 3 bytes：14 個字 = 42 bytes，第 15 個字會超過
-    expect(utf8Length(truncateUtf8('測'.repeat(20)))).toBe(42);
+    // 中文 3 bytes：12 個字 = 36 bytes，第 13 個字會超過 38
+    expect(utf8Length(truncateUtf8('測'.repeat(20)))).toBe(36);
     expect(truncateUtf8('ab測', 4)).toBe('ab');
   });
 

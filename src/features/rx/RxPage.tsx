@@ -153,7 +153,7 @@ function Rx({ data }: { data: AppData }) {
       if (r.status === 'new' && r.announcement?.shown) {
         setLatest(r.announcement);
         setFlash((f) => f + 1);
-        if (emergencyMsg || msg.platform === 0) {
+        if (emergencyMsg) {
           setEmergency(r.announcement);
           vibrate(VIBRATE_EMERGENCY);
         } else {
@@ -325,7 +325,9 @@ function Rx({ data }: { data: AppData }) {
 
       {/* 折疊式工程與進階設定：保持一般使用者介面簡潔，同時保留完整 Demo 監控數據 */}
       <details className="card" style={{ marginTop: 14 }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>進階與工程狀態（頻段、月台鎖定、防偽計數）</summary>
+        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>
+          進階與工程狀態（頻段、月台鎖定、防偽計數）
+        </summary>
         <div className="stack" style={{ marginTop: 12 }}>
           {running && (
             <div className="status" aria-label="接收狀態" data-testid="status">

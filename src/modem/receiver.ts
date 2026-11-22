@@ -163,6 +163,8 @@ export class Receiver {
   private readonly symWin: Float32Array;
   private readonly symLen: number;
   private readonly symOff: number;
+  /** 解碼窗分幾段累積（1 = 整窗，PoC） */
+  private readonly segments: number;
   private readonly maxSymbols: number;
   private hist: { a: Float64Array[]; b: Float64Array[]; za: Float64Array[]; zb: Float64Array[] } = {
     a: [],
@@ -202,8 +204,9 @@ export class Receiver {
     this.hop = Math.max(1, Math.round(this.N / RX.hopDiv));
     this.k = Math.round(this.N / this.hop);
     this.Wd = Math.round(this.N * RX.detectWin);
-    this.symLen = Math.round(RX.symWinLen * this.N);
+    this.symLen = Math.round((this.opts.accumulation ? RX.symWinLenAccum : RX.symWinLen) * this.N);
     this.symOff = Math.round(RX.symWinStart * this.N);
+    this.segments = this.opts.accumulation ? RX.accumSegments : 1;
     this.maxSymbols = HEADER_SYMBOLS + 2 * (this.cfg.maxLen + this.cfg.nsym);
     this.ownsBuffer = !init.buffer;
     this.buffer = init.buffer ?? new SampleBuffer(fs);
@@ -414,7 +417,7 @@ export class Receiver {
 
   // ---------------- 解調 ----------------
 
-/** 將視窗切成多段各自計算 Goertzel 功率並累加（避免移動跨越駐波死角時相位反轉自我抵銷） */
+  /** 將視窗切成多段各自計算 Goertzel 功率並累加（避免移動跨越駐波死角時相位反轉自我抵銷） */
   private slicedGoertzel(x: Float32Array, coef: number, slices: number): number {
     if (slices <= 1) return goertzel(x, coef);
     const subLen = Math.floor(x.length / slices);
@@ -429,9 +432,11 @@ export class Receiver {
   private symbolPowersAt(start: number, alpha: number): Float64Array {
     const x = this.buffer.windowed(start, this.symLen, this.symWin);
     const P = new Float64Array(NT);
-    const slices = this.opts.doppler ? 2 : 1;
+    const slices = this.segments;
     if (alpha === 1) for (let i = 0; i < NT; i++) P[i] = this.slicedGoertzel(x, this.coefAll[i], slices);
-    else for (let i = 0; i < NT; i++) P[i] = this.slicedGoertzel(x, goertzelCoef(this.F[i] * alpha, this.fs), slices);
+    else
+      for (let i = 0; i < NT; i++)
+        P[i] = this.slicedGoertzel(x, goertzelCoef(this.F[i] * alpha, this.fs), slices);
     return P;
   }
 
@@ -527,8 +532,8 @@ export class Receiver {
       const x = this.symWin; // symbolPowersAt 剛填好的視窗
       const fc = this.F[ch] * d.alpha;
       const h = DOPPLER.trackProbeHz;
-      const pm = this.slicedGoertzel(x, goertzelCoef(fc - h, this.fs), 2);
-      const pp = this.slicedGoertzel(x, goertzelCoef(fc + h, this.fs), 2);
+      const pm = this.slicedGoertzel(x, goertzelCoef(fc - h, this.fs), this.segments);
+      const pp = this.slicedGoertzel(x, goertzelCoef(fc + h, this.fs), this.segments);
       const delta = parabolicPeak(pm, P[ch], pp) * h;
       const measured = (fc + delta) / this.F[ch];
       d.alpha += DOPPLER.trackGain * (measured - d.alpha);

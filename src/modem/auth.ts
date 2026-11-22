@@ -11,9 +11,7 @@ const KEY_ID = 'station-hmac-key-v1';
 /**
  * 開發測試用預設金鑰（正式部署時應由站務後台透過 HTTPS 首次連線下發並寫入 IndexedDB）
  */
-const DEV_FALLBACK_SECRET = new TextEncoder().encode(
-  'HearBroadcast-Station-Secret-Key-2026'
-);
+const DEV_FALLBACK_SECRET = new TextEncoder().encode('HearBroadcast-Station-Secret-Key-2026');
 
 /**
  * 取得目前分鐘級時間戳記（16-bit 無號整數，約 45.5 天循環一次，足以覆蓋 ±2 分鐘視窗）
@@ -32,12 +30,12 @@ export async function getAuthKey(rawSecret?: Uint8Array): Promise<CryptoKey> {
 
   const secretMaterial = rawSecret ?? DEV_FALLBACK_SECRET;
   const cryptoKey = await crypto.subtle.importKey(
-  'raw',
-  secretMaterial as BufferSource,
-  { name: 'HMAC', hash: 'SHA-256' },
-  false, // extractable = false：禁止任何程式碼匯出原始金鑰
-  ['sign', 'verify']
-);
+    'raw',
+    secretMaterial as BufferSource,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false, // extractable = false：禁止任何程式碼匯出原始金鑰
+    ['sign', 'verify'],
+  );
 
   await saveKeyToIndexedDB(cryptoKey);
   return cryptoKey;
@@ -48,7 +46,7 @@ export async function getAuthKey(rawSecret?: Uint8Array): Promise<CryptoKey> {
  */
 export async function createAuthTrailer(
   payload: Uint8Array,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
 ): Promise<Uint8Array> {
   const key = await getAuthKey();
   const minuteTs = getMinuteTimestamp(nowMs);
@@ -62,9 +60,7 @@ export async function createAuthTrailer(
   signedInput.set(payload, 0);
   signedInput.set(tsBytes, payload.length);
 
-  const fullSignature = new Uint8Array(
-    await crypto.subtle.sign('HMAC', key, signedInput)
-  );
+  const fullSignature = new Uint8Array(await crypto.subtle.sign('HMAC', key, signedInput));
 
   const trailer = new Uint8Array(AUTH_TRAILER_BYTES);
   trailer.set(tsBytes, 0);
@@ -84,7 +80,7 @@ export async function verifyAuthTrailer(
   payload: Uint8Array,
   trailer: Uint8Array,
   windowMinutes: number = 2,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
 ): Promise<VerifyResult> {
   if (trailer.length !== AUTH_TRAILER_BYTES) {
     return { valid: false, reason: 'INVALID_LENGTH' };
@@ -113,9 +109,7 @@ export async function verifyAuthTrailer(
   signedInput.set(payload, 0);
   signedInput.set(trailer.subarray(0, TIMESTAMP_BYTES), payload.length);
 
-  const expectedFullSig = new Uint8Array(
-    await crypto.subtle.sign('HMAC', key, signedInput)
-  );
+  const expectedFullSig = new Uint8Array(await crypto.subtle.sign('HMAC', key, signedInput));
   const expectedTag = expectedFullSig.subarray(0, TAG_BYTES);
 
   if (!constantTimeEqual(receivedTag, expectedTag)) {
@@ -149,7 +143,7 @@ export class EmergencyAlertGuard {
     platformId: number,
     seqId: number,
     templateId: number,
-    nowMs: number = Date.now()
+    nowMs: number = Date.now(),
   ): boolean {
     // 非緊急廣播（一般月台資訊）通過單包 HMAC 驗證即可立即顯示
     if (platformId !== 0) {

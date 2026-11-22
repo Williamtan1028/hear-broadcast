@@ -86,8 +86,12 @@ export const RX = {
   threshold: 0.3,
   /** 解碼窗起點（符號內比例） */
   symWinStart: 0.2,
-  /** 解碼窗長度（符號比例） */
-  symWinLen: 0.9,
+  /** 解碼窗長度（符號比例，PoC） */
+  symWinLen: 0.75,
+  /** 分段累積時的解碼窗長度（符號比例；窗尾延伸到下一個符號的滑音區前段） */
+  symWinLenAccum: 0.9,
+  /** 分段累積：解碼窗切成幾段各自算功率再相加 */
+  accumSegments: 2,
   /** 精細對齊搜尋範圍（±符號比例） */
   alignRange: 0.25,
   /** 精細對齊步長（秒） */
@@ -118,7 +122,7 @@ export const AUTO = {
 export const DOPPLER = {
   /** 聲速 m/s */
   soundSpeed: 343,
-  /** 偵測階段的頻偏搜尋範圍 ±Hz（放寬至 180 Hz，支援約 3.0 m/s 快速步行） */
+  /** 偵測階段的頻偏搜尋範圍 ±Hz（150 Hz 在 19.5 kHz 約對應 2.6 m/s 快走） */
   maxShiftHz: 150,
   /** 偵測階段頻偏搜尋的步長上限（Hz）；實際步長是 FFT bin 寬度 */
   coarseStepHz: 12,
@@ -162,6 +166,11 @@ export const LEAKAGE = {
 /** 接收端可開關的優化選項 */
 export interface RxOptions {
   /**
+   * 分段累積：解碼窗加長並切成 2 段，各段 Goertzel 功率相加（非同調累積）。
+   * 手機移動穿過駐波節點時，前後兩段的相位可能相反，整窗同調計算會互相抵銷；分段相加則不會。
+   */
+  accumulation: boolean;
+  /**
    * 低 SNR 偵測：以「同步音功率 / 頻道背景噪音」取代「同步音占 18 頻道總功率的比例」，
    * 讓訊號弱、只比噪音高幾 dB 時也能觸發（需要 FFT 前端）
    */
@@ -180,6 +189,7 @@ export interface RxOptions {
 
 /** PoC 基準版本：全部關閉 */
 export const BASELINE_OPTIONS: RxOptions = {
+  accumulation: false,
   snrDetect: false,
   doppler: false,
   tracking: false,
@@ -190,6 +200,7 @@ export const BASELINE_OPTIONS: RxOptions = {
 
 /** 預設採用的優化（依 docs/benchmarks.md 的數據決定） */
 export const DEFAULT_OPTIONS: RxOptions = {
+  accumulation: true,
   snrDetect: true,
   doppler: true,
   tracking: true,

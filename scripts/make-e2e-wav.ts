@@ -58,8 +58,12 @@ export function makeE2eWav(): Uint8Array {
   const fs = 48000;
   const parts: Float32Array[] = [new Float32Array(fs)];
   for (const { msg, amp } of E2E_MESSAGES) {
-    parts.push(synthesize(encodeMessage(msg), DEFAULTS, fs, amp));
-    parts.push(new Float32Array(Math.round(fs * 1.5)));
+    // 和站務端的預設一樣，每則送兩次（相同 seq）：弱訊號靠重送／合併收到，接收端去重
+    const sig = synthesize(encodeMessage(msg), DEFAULTS, fs, amp);
+    for (let r = 0; r < 2; r++) {
+      parts.push(sig);
+      parts.push(new Float32Array(Math.round(fs * 1.5)));
+    }
   }
   parts.push(new Float32Array(fs * 2));
   const n = parts.reduce((s, p) => s + p.length, 0);

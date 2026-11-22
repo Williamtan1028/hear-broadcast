@@ -1,5 +1,5 @@
 /**
- * 協定 v2：封包 payload 格式。
+ * 協定 v2：封包 payload 格式（含 6 Bytes 離線防偽造驗證尾碼）。
  *
  * | 位元組 | 欄位 |
  * |---|---|
@@ -10,19 +10,29 @@
  * | 模板 4 | packVersion（模板庫版本） |
  * | 模板 5 | templateId |
  * | 模板 6～7 | p1, p2 |
- * | 文字 4～ | UTF-8 文字，最多 44 bytes |
+ * | 文字 4～ | UTF-8 文字，最多 38 bytes |
+ * | 尾碼倒數 6～5 | 2-Byte 分鐘級時間戳記（16-bit） |
+ * | 尾碼倒數 4～1 | 4-Byte 截斷式 HMAC-SHA256 防偽指紋 |
  */
+import {
+  AUTH_TRAILER_BYTES,
+  createAuthTrailer,
+  EmergencyAlertGuard,
+  verifyAuthTrailer,
+} from './auth.ts';
 import { DEFAULTS } from './config.ts';
+
+export { EmergencyAlertGuard };
 
 export const PROTOCOL_VERSION = 2;
 export const TYPE_TEMPLATE = 1;
 export const TYPE_TEXT = 2;
 /** 標頭長度 */
 export const HEADER_BYTES = 4;
-/** 模板封包長度 */
+/** 模板封包長度（未含防偽尾碼） */
 export const TEMPLATE_BYTES = 8;
-/** 自由文字最多幾個位元組 */
-export const MAX_TEXT_BYTES = DEFAULTS.maxLen - HEADER_BYTES;
+/** 自由文字最多幾個位元組（預留 6 Bytes 給時間戳記＋HMAC） */
+export const MAX_TEXT_BYTES = DEFAULTS.maxLen - HEADER_BYTES - AUTH_TRAILER_BYTES;
 /** 月台編號上限 */
 export const MAX_PLATFORM = 15;
 
@@ -76,7 +86,7 @@ export function truncateUtf8(s: string, maxBytes: number = MAX_TEXT_BYTES): stri
 }
 
 /**
- * 編碼訊息為 payload 位元組。
+ * 編碼原始訊息為 payload 位元組（未含防偽尾碼）。
  * @throws ProtocolError 欄位超出範圍或文字太長
  */
 export function encodeMessage(m: Message): Uint8Array {
@@ -103,7 +113,19 @@ export function encodeMessage(m: Message): Uint8Array {
 }
 
 /**
- * 解碼 payload。版本、型別、長度、UTF-8 都會驗證，可作為 RS 之外的額外完整性檢查。
+ * 【發送端使用】編碼訊息並附上 6 Bytes 防偽尾碼 [Timestamp(2B) + HMAC(4B)]，準備交給 RS 編碼。
+ */
+export async function encodeSignedMessage(m: Message, nowMs?: number): Promise<Uint8Array> {
+  const rawPayload = encodeMessage(m);
+  const trailer = await createAuthTrailer(rawPayload, nowMs);
+  const signed = new Uint8Array(rawPayload.length + AUTH_TRAILER_BYTES);
+  signed.set(rawPayload, 0);
+  signed.set(trailer, rawPayload.length);
+  return signed;
+}
+
+/**
+ * 解碼原始 payload（未含防偽尾碼）。
  * @throws ProtocolError 格式不符
  */
 export function decodeMessage(p: ArrayLike<number>): Message {
@@ -130,4 +152,33 @@ export function decodeMessage(p: ArrayLike<number>): Message {
     return { type: 'text', ...head, text };
   }
   throw new ProtocolError(`未知的封包型別 ${type}`);
+}
+
+/**
+ * 【接收端使用】驗證時間窗（預設 ±2 分鐘）與 HMAC 指紋後解碼訊息。
+ * @throws ProtocolError 簽章無效、時間過期或格式不符
+ */
+export async function decodeSignedMessage(
+  p: ArrayLike<number>,
+  windowMinutes: number = 2,
+  nowMs?: number,
+): Promise<Message> {
+  const bytes = p instanceof Uint8Array ? p : Uint8Array.from(p);
+  if (bytes.length <= AUTH_TRAILER_BYTES) {
+    throw new ProtocolError('封包缺少防偽驗證尾碼');
+  }
+  const payloadLen = bytes.length - AUTH_TRAILER_BYTES;
+  const rawPayload = bytes.subarray(0, payloadLen);
+  const trailer = bytes.subarray(payloadLen);
+
+  const authResult = await verifyAuthTrailer(rawPayload, trailer, windowMinutes, nowMs);
+  if (!authResult.valid) {
+    throw new ProtocolError(
+      authResult.reason === 'INVALID_LENGTH'
+        ? '防偽驗證尾碼長度錯誤'
+        : '廣播簽章無效或時間戳記已過期（疑似偽造或錄音重播）',
+    );
+  }
+
+  return decodeMessage(rawPayload);
 }

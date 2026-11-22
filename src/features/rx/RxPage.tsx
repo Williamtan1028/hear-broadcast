@@ -1,5 +1,5 @@
 /**
- * 乘客端（#/rx）：開始接收 → 字幕看板、狀態列、緊急畫面、歷史紀錄。
+ * 乘客端（#/rx）：一鍵啟動接收 → 離線 HMAC 驗證＋雙包緊急鎖 → 自動語系字幕看板。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { WithData, type AppData } from '../../app/data.tsx';
@@ -8,8 +8,9 @@ import { ReceiverPipeline } from '../../audio/receiverPipeline.ts';
 import type { LevelInfo, RxMode, WorkerFailure, WorkerMessage } from '../../audio/protocol.ts';
 import { LANG_LABELS, LANG_TAGS, LANGS, type Lang } from '../../data/schema.ts';
 import { UI } from '../../i18n/index.ts';
+import { getAuthKey } from '../../modem/auth.ts';
 import { CANDIDATES, LOW_BAND_F0, MODES, type ModemConfig } from '../../modem/config.ts';
-import { ProtocolError, decodeMessage } from '../../modem/protocol.ts';
+import { EmergencyAlertGuard, ProtocolError, decodeSignedMessage } from '../../modem/protocol.ts';
 import {
   keepScreenOn,
   loadSetting,
@@ -29,8 +30,15 @@ interface RxSettings {
   platformMode: 'auto' | 'manual';
   manualPlatform: number;
 }
+
+function detectInitialLang(): Lang {
+  if (typeof navigator === 'undefined') return 'zh';
+  const code = navigator.language.toLowerCase().split('-')[0] as Lang;
+  return (LANGS as readonly string[]).includes(code) ? code : 'zh';
+}
+
 const DEFAULT_SETTINGS: RxSettings = {
-  lang: 'zh',
+  lang: detectInitialLang(),
   fontSize: 2,
   band: -1,
   platformMode: 'auto',
@@ -69,9 +77,8 @@ function Rx({ data }: { data: AppData }) {
   const [emergency, setEmergency] = useState<Announcement | null>(null);
   const [packOutdated, setPackOutdated] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [counts, setCounts] = useState({ ok: 0, fail: 0 });
+  const [counts, setCounts] = useState({ ok: 0, fail: 0, blocked: 0 });
 
-  // Inbox 是可變物件：只在事件處理中修改，render 只讀 view（不可變的快照）
   const [inbox] = useState(() => {
     const ib = new Inbox();
     ib.setPlatformMode(settings.platformMode, settings.manualPlatform);
@@ -89,6 +96,7 @@ function Rx({ data }: { data: AppData }) {
   );
   const pipeline = useRef<ReceiverPipeline | null>(null);
   const releaseWake = useRef<(() => void) | null>(null);
+  const emergencyGuard = useRef(new EmergencyAlertGuard());
 
   const setPlatformMode = (platformMode: 'auto' | 'manual', manualPlatform = settings.manualPlatform) => {
     inbox.setPlatformMode(platformMode, manualPlatform);
@@ -96,7 +104,6 @@ function Rx({ data }: { data: AppData }) {
     refresh();
   };
 
-  // 月台判斷只看最近 20 秒：定期更新顯示
   useEffect(() => {
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
@@ -106,23 +113,37 @@ function Rx({ data }: { data: AppData }) {
   const translator = useMemo(() => new PackTranslator(data.pack, station), [data.pack, station]);
 
   const onEvent = useCallback(
-    (e: WorkerMessage | WorkerFailure) => {
+    async (e: WorkerMessage | WorkerFailure) => {
       if (!e.ok) {
         setCounts((c) => ({ ...c, fail: c.fail + 1 }));
         return;
       }
       let msg;
       try {
-        msg = decodeMessage(e.payload);
+        msg = await decodeSignedMessage(Uint8Array.from(e.payload));
       } catch (err) {
-        if (err instanceof ProtocolError) setCounts((c) => ({ ...c, fail: c.fail + 1 }));
+        if (err instanceof ProtocolError) {
+          console.warn('[Security] 攔截無效或過期廣播:', err.message);
+          setCounts((c) => ({ ...c, fail: c.fail + 1, blocked: c.blocked + 1 }));
+        }
         return;
       }
-      setCounts((c) => ({ ...c, ok: c.ok + 1 }));
+
       const tpl =
         msg.type === 'template' ? data.pack.templates.find((x) => x.id === msg.templateId) : undefined;
       if (msg.type === 'template' && msg.packVersion > data.pack.packVersion) setPackOutdated(true);
       const emergencyMsg = tpl?.category === 'emergency';
+
+      // Platform = 0（全站緊急覆蓋）必須在進入 inbox 去重前通過雙包驗證鎖
+      const tplId = msg.type === 'template' ? msg.templateId : -1;
+      const isConfirmed = emergencyGuard.current.confirmPacket(msg.platform, msg.seq, tplId);
+      if (!isConfirmed) {
+        setNotice('偵測到全站緊急警報首包，等待第二包雙重驗證確認…');
+        return;
+      }
+
+      setNotice(null);
+      setCounts((c) => ({ ...c, ok: c.ok + 1 }));
       const r = inbox.receive(
         msg,
         { quality: e.quality, fixed: e.fixed, combined: e.combined, emergency: emergencyMsg },
@@ -132,7 +153,7 @@ function Rx({ data }: { data: AppData }) {
       if (r.status === 'new' && r.announcement?.shown) {
         setLatest(r.announcement);
         setFlash((f) => f + 1);
-        if (emergencyMsg) {
+        if (emergencyMsg || msg.platform === 0) {
           setEmergency(r.announcement);
           vibrate(VIBRATE_EMERGENCY);
         } else {
@@ -147,10 +168,14 @@ function Rx({ data }: { data: AppData }) {
   const start = async () => {
     setError(null);
     setStarting(true);
+    // 預載 IndexedDB 不可匯出金鑰（離線驗票用）
+    void getAuthKey();
     const mode: RxMode =
       settings.band < 0 ? { kind: 'auto' } : { kind: 'manual', cfg: CANDIDATES[settings.band] };
     const p = new ReceiverPipeline({
-      onEvent: (ev) => onEventRef.current(ev),
+      onEvent: (ev) => {
+        void onEventRef.current(ev);
+      },
       onLevel: setLevel,
       onLock: setLocked,
       onError: (m) => setError(m),
@@ -186,7 +211,6 @@ function Rx({ data }: { data: AppData }) {
     [],
   );
 
-  // 讓 Worker 回呼永遠使用最新的翻譯與設定
   const onEventRef = useRef(onEvent);
   useEffect(() => {
     onEventRef.current = onEvent;
@@ -211,22 +235,12 @@ function Rx({ data }: { data: AppData }) {
     <div lang={LANG_TAGS[settings.lang]}>
       <h1>{settings.lang === 'en' ? 'Passenger' : '乘客端'}</h1>
 
+      {/* 一鍵啟動卡片：乘客無需任何設定即可直接點擊接收 */}
       {!running ? (
         <div className="card stack">
           <button className="big primary" onClick={start} disabled={starting} data-testid="start">
             {starting ? t.starting : t.start}
           </button>
-          <label className="field">
-            {t.mode}
-            <select value={settings.band} onChange={(e) => update({ band: Number(e.target.value) })}>
-              <option value={-1}>{t.auto}</option>
-              {CANDIDATES.map((c, i) => (
-                <option key={i} value={i}>
-                  {c.f0 / 1000} kHz・{modeName(c, t)}
-                </option>
-              ))}
-            </select>
-          </label>
           {error && (
             <div className="error" role="alert">
               {error}
@@ -235,33 +249,13 @@ function Rx({ data }: { data: AppData }) {
         </div>
       ) : (
         <div className="card stack">
-          <p className="warn" role="note">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <span className="ok">● 正在離線聆聽月台廣播（HMAC 防偽驗證已啟用）</span>
+            <button onClick={stop}>{t.stop}</button>
+          </div>
+          <p className="small muted" style={{ margin: 0 }}>
             {t.keepOpen}
           </p>
-          <div className="status" aria-label="接收狀態" data-testid="status">
-            <span>
-              {t.band}：<b data-testid="band">{bandText}</b>
-            </span>
-            <span>
-              {t.station}：
-              <b>{station ? station.name[settings.lang] : (view.stationId ?? t.unknownStation)}</b>
-            </span>
-            <span data-testid="platform-status">
-              {t.platform}：
-              <b>
-                {settings.platformMode === 'auto'
-                  ? t.platformAuto(curPlatform)
-                  : t.platformManual(settings.manualPlatform)}
-              </b>
-            </span>
-            <span>
-              {t.sync}：<b>{(level?.score ?? 0).toFixed(2)}</b>
-            </span>
-            <span>
-              <b>{t.okFail(counts.ok, counts.fail)}</b>
-            </span>
-          </div>
-          <button onClick={stop}>{t.stop}</button>
         </div>
       )}
 
@@ -304,6 +298,7 @@ function Rx({ data }: { data: AppData }) {
         )}
       </section>
 
+      {/* 常用顯示設定（語言與字級） */}
       <div className="card stack" style={{ marginTop: 14 }}>
         <div role="group" aria-label={t.language} className="row">
           <strong>{t.language}：</strong>
@@ -326,22 +321,71 @@ function Rx({ data }: { data: AppData }) {
             </button>
           ))}
         </div>
-        <div role="group" aria-label={t.manualPlatformLabel} className="row">
-          <strong>{t.manualPlatformLabel}：</strong>
-          <button aria-pressed={settings.platformMode === 'auto'} onClick={() => setPlatformMode('auto')}>
-            {t.autoPlatform}
-          </button>
-          {Array.from({ length: station?.platforms ?? 2 }, (_, i) => i + 1).map((p) => (
-            <button
-              key={p}
-              aria-pressed={settings.platformMode === 'manual' && settings.manualPlatform === p}
-              onClick={() => setPlatformMode('manual', p)}
-            >
-              {t.platformN(p)}
-            </button>
-          ))}
-        </div>
       </div>
+
+      {/* 折疊式工程與進階設定：保持一般使用者介面簡潔，同時保留完整 Demo 監控數據 */}
+      <details className="card" style={{ marginTop: 14 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>進階與工程狀態（頻段、月台鎖定、防偽計數）</summary>
+        <div className="stack" style={{ marginTop: 12 }}>
+          {running && (
+            <div className="status" aria-label="接收狀態" data-testid="status">
+              <span>
+                {t.band}：<b data-testid="band">{bandText}</b>
+              </span>
+              <span>
+                {t.station}：
+                <b>{station ? station.name[settings.lang] : (view.stationId ?? t.unknownStation)}</b>
+              </span>
+              <span data-testid="platform-status">
+                {t.platform}：
+                <b>
+                  {settings.platformMode === 'auto'
+                    ? t.platformAuto(curPlatform)
+                    : t.platformManual(settings.manualPlatform)}
+                </b>
+              </span>
+              <span>
+                {t.sync}：<b>{(level?.score ?? 0).toFixed(2)}</b>
+              </span>
+              <span>
+                <b>
+                  {t.okFail(counts.ok, counts.fail)}（攔截偽造/過期：{counts.blocked}）
+                </b>
+              </span>
+            </div>
+          )}
+
+          {!running && (
+            <label className="field">
+              {t.mode}
+              <select value={settings.band} onChange={(e) => update({ band: Number(e.target.value) })}>
+                <option value={-1}>{t.auto}</option>
+                {CANDIDATES.map((c, i) => (
+                  <option key={i} value={i}>
+                    {c.f0 / 1000} kHz・{modeName(c, t)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <div role="group" aria-label={t.manualPlatformLabel} className="row">
+            <strong>{t.manualPlatformLabel}：</strong>
+            <button aria-pressed={settings.platformMode === 'auto'} onClick={() => setPlatformMode('auto')}>
+              {t.autoPlatform}
+            </button>
+            {Array.from({ length: station?.platforms ?? 2 }, (_, i) => i + 1).map((p) => (
+              <button
+                key={p}
+                aria-pressed={settings.platformMode === 'manual' && settings.manualPlatform === p}
+                onClick={() => setPlatformMode('manual', p)}
+              >
+                {t.platformN(p)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </details>
 
       <section className="card" aria-label={t.history}>
         <h2>{t.history}</h2>

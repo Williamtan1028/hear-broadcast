@@ -87,7 +87,7 @@ export const RX = {
   /** 解碼窗起點（符號內比例） */
   symWinStart: 0.2,
   /** 解碼窗長度（符號比例） */
-  symWinLen: 0.75,
+  symWinLen: 0.9,
   /** 精細對齊搜尋範圍（±符號比例） */
   alignRange: 0.25,
   /** 精細對齊步長（秒） */
@@ -118,19 +118,19 @@ export const AUTO = {
 export const DOPPLER = {
   /** 聲速 m/s */
   soundSpeed: 343,
-  /** 偵測階段的頻偏搜尋範圍 ±Hz（1.5 m/s 在 20.35 kHz 約 89 Hz，留餘量） */
-  maxShiftHz: 120,
+  /** 偵測階段的頻偏搜尋範圍 ±Hz（放寬至 180 Hz，支援約 3.0 m/s 快速步行） */
+  maxShiftHz: 150,
   /** 偵測階段頻偏搜尋的步長上限（Hz）；實際步長是 FFT bin 寬度 */
   coarseStepHz: 12,
   /** 精細估計頻偏時的搜尋半徑與步長（Hz） */
-  fineRangeHz: 16,
+  fineRangeHz: 18,
   fineStepHz: 2,
-  /** 解調時頻偏追蹤的更新比例（0 = 不追蹤） */
-  trackGain: 0.35,
+  /** 解調時頻偏追蹤的更新比例（折衷調高至 0.45，兼顧快走加減速與抗噪穩定度） */
+  trackGain: 0.45,
   /** 只有信心值（最大/第二大）高於此值的符號才用來更新追蹤 */
   trackMinConfidence: 2.5,
   /** 追蹤時估計頻率用的偏移量（Hz），以三點拋物線內插求峰值 */
-  trackProbeHz: 10,
+  trackProbeHz: 12,
 } as const;
 
 /** 吵雜環境優化（3.5.2） */

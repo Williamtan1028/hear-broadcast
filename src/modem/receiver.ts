@@ -414,12 +414,24 @@ export class Receiver {
 
   // ---------------- 解調 ----------------
 
+/** 將視窗切成多段各自計算 Goertzel 功率並累加（避免移動跨越駐波死角時相位反轉自我抵銷） */
+  private slicedGoertzel(x: Float32Array, coef: number, slices: number): number {
+    if (slices <= 1) return goertzel(x, coef);
+    const subLen = Math.floor(x.length / slices);
+    let sum = 0;
+    for (let s = 0; s < slices; s++) {
+      sum += goertzel(x.subarray(s * subLen, (s + 1) * subLen), coef);
+    }
+    return sum;
+  }
+
   /** 計算從 start 開始一個解碼窗內，在伸縮比例 alpha 下 18 個頻道的功率 */
   private symbolPowersAt(start: number, alpha: number): Float64Array {
     const x = this.buffer.windowed(start, this.symLen, this.symWin);
     const P = new Float64Array(NT);
-    if (alpha === 1) for (let i = 0; i < NT; i++) P[i] = goertzel(x, this.coefAll[i]);
-    else for (let i = 0; i < NT; i++) P[i] = goertzel(x, goertzelCoef(this.F[i] * alpha, this.fs));
+    const slices = this.opts.doppler ? 2 : 1;
+    if (alpha === 1) for (let i = 0; i < NT; i++) P[i] = this.slicedGoertzel(x, this.coefAll[i], slices);
+    else for (let i = 0; i < NT; i++) P[i] = this.slicedGoertzel(x, goertzelCoef(this.F[i] * alpha, this.fs), slices);
     return P;
   }
 
@@ -515,8 +527,8 @@ export class Receiver {
       const x = this.symWin; // symbolPowersAt 剛填好的視窗
       const fc = this.F[ch] * d.alpha;
       const h = DOPPLER.trackProbeHz;
-      const pm = goertzel(x, goertzelCoef(fc - h, this.fs));
-      const pp = goertzel(x, goertzelCoef(fc + h, this.fs));
+      const pm = this.slicedGoertzel(x, goertzelCoef(fc - h, this.fs), 2);
+      const pp = this.slicedGoertzel(x, goertzelCoef(fc + h, this.fs), 2);
       const delta = parabolicPeak(pm, P[ch], pp) * h;
       const measured = (fc + delta) / this.F[ch];
       d.alpha += DOPPLER.trackGain * (measured - d.alpha);

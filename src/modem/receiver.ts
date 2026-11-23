@@ -31,8 +31,8 @@ import {
 import { defaultDetector, type SymbolDecision, type SymbolDetector } from './detectors/index.ts';
 import { buildOffsetTable, offsetToAlpha, parabolicPeak, type OffsetTable } from './doppler.ts';
 import { SampleBuffer, SpectrumCache } from './buffer.ts';
-import { goertzel, goertzelCoef } from './dsp.ts';
-import { channelFreqs, symbolSamples } from './fsk.ts';
+import { goertzel, goertzelCoef, segmentedPower } from './dsp.ts';
+import { channelFreqs, frameSymbols, symbolSamples } from './fsk.ts';
 import { RsError, rsDecode, type RsDecodeResult } from './rs.ts';
 
 /** 成功解碼的訊息 */
@@ -163,6 +163,8 @@ export class Receiver {
   private readonly symWin: Float32Array;
   private readonly symLen: number;
   private readonly symOff: number;
+  /** 解碼窗分幾段累積（1 = 整窗，PoC） */
+  private readonly segments: number;
   private readonly maxSymbols: number;
   private hist: { a: Float64Array[]; b: Float64Array[]; za: Float64Array[]; zb: Float64Array[] } = {
     a: [],
@@ -202,8 +204,9 @@ export class Receiver {
     this.hop = Math.max(1, Math.round(this.N / RX.hopDiv));
     this.k = Math.round(this.N / this.hop);
     this.Wd = Math.round(this.N * RX.detectWin);
-    this.symLen = Math.round(RX.symWinLen * this.N);
+    this.symLen = Math.round((this.opts.accumulation ? RX.symWinLenAccum : RX.symWinLen) * this.N);
     this.symOff = Math.round(RX.symWinStart * this.N);
+    this.segments = this.opts.accumulation ? RX.accumSegments : 1;
     this.maxSymbols = HEADER_SYMBOLS + 2 * (this.cfg.maxLen + this.cfg.nsym);
     this.ownsBuffer = !init.buffer;
     this.buffer = init.buffer ?? new SampleBuffer(fs);
@@ -414,25 +417,17 @@ export class Receiver {
 
   // ---------------- 解調 ----------------
 
-/** 將視窗切成多段各自計算 Goertzel 功率並累加（避免移動跨越駐波死角時相位反轉自我抵銷） */
-  private slicedGoertzel(x: Float32Array, coef: number, slices: number): number {
-    if (slices <= 1) return goertzel(x, coef);
-    const subLen = Math.floor(x.length / slices);
-    let sum = 0;
-    for (let s = 0; s < slices; s++) {
-      sum += goertzel(x.subarray(s * subLen, (s + 1) * subLen), coef);
-    }
-    return sum;
-  }
-
   /** 計算從 start 開始一個解碼窗內，在伸縮比例 alpha 下 18 個頻道的功率 */
   private symbolPowersAt(start: number, alpha: number): Float64Array {
-    const x = this.buffer.windowed(start, this.symLen, this.symWin);
     const P = new Float64Array(NT);
-    const slices = this.opts.doppler ? 2 : 1;
-    if (alpha === 1) for (let i = 0; i < NT; i++) P[i] = this.slicedGoertzel(x, this.coefAll[i], slices);
-    else for (let i = 0; i < NT; i++) P[i] = this.slicedGoertzel(x, goertzelCoef(this.F[i] * alpha, this.fs), slices);
+    this.buffer.windowed(start, this.symLen, this.symWin);
+    for (let i = 0; i < NT; i++) P[i] = this.windowPower(this.F[i] * alpha);
     return P;
+  }
+
+  /** 最近一次 symbolPowersAt 的視窗中，頻率 f 的功率（解調與追蹤探測使用相同的分段方式） */
+  private windowPower(f: number): number {
+    return segmentedPower(this.symWin, (2 * Math.PI * f) / this.fs, this.segments, RX.accumMetric);
   }
 
   /** 符號 j 在起點 p、伸縮比例 alpha 下的解碼窗起點 */
@@ -524,11 +519,11 @@ export class Receiver {
     d.dec.push(dec);
     if (doppler && this.opts.tracking && conf >= DOPPLER.trackMinConfidence) {
       // 決策導向追蹤：在判定的頻道兩側各探測一次，以拋物線內插估計實際頻率
-      const x = this.symWin; // symbolPowersAt 剛填好的視窗
+      // symbolPowersAt 剛填好的視窗
       const fc = this.F[ch] * d.alpha;
       const h = DOPPLER.trackProbeHz;
-      const pm = this.slicedGoertzel(x, goertzelCoef(fc - h, this.fs), 2);
-      const pp = this.slicedGoertzel(x, goertzelCoef(fc + h, this.fs), 2);
+      const pm = this.windowPower(fc - h);
+      const pp = this.windowPower(fc + h);
       const delta = parabolicPeak(pm, P[ch], pp) * h;
       const measured = (fc + delta) / this.F[ch];
       d.alpha += DOPPLER.trackGain * (measured - d.alpha);
@@ -621,6 +616,9 @@ export class Receiver {
    * 登記失敗封包：與暫存區中的候選配對成合併工作，並讓它在背景繼續解調（之後可能和下一次傳送合併）。
    */
   private registerFailure(d: Demod, len: number | null, lenSoft: boolean): void {
+    // 前導碼品質太低多半是噪音假觸發：仍可和暫存區中品質好的封包配對，
+    // 但自己不進暫存區，也只在有配對時才背景解調（避免吵雜環境下白白耗電）
+    const good = d.quality >= NOISE.combineMinQuality;
     const N = this.cfg.nsym;
     for (const e of this.store.candidates(d.p)) {
       if (this.jobs.length >= NOISE.combineMaxJobs) break;
@@ -659,11 +657,43 @@ export class Receiver {
       if (e.d.syms.length < S && !this.background.includes(e.d)) this.background.push(e.d);
       this.jobs.push({ cur: d, other: e.d, len: L, reserve });
     }
-    d.target = len !== null ? HEADER_SYMBOLS + 2 * (len + N) : this.maxSymbols;
+    const paired = this.jobs.some((j) => j.cur === d);
+    if (!good && !paired) return;
+    d.target = len !== null && good ? HEADER_SYMBOLS + 2 * (len + N) : good ? this.maxSymbols : 0;
     for (const j of this.jobs)
       if (j.cur === d) d.target = Math.max(d.target, HEADER_SYMBOLS + 2 * (j.len + N));
     if (!this.background.includes(d)) this.background.push(d);
-    this.store.put({ d, len, lenSoft, quality: d.quality } satisfies FailedEntry<Demod>);
+    if (good) this.store.put({ d, len, lenSoft, quality: d.quality } satisfies FailedEntry<Demod>);
+  }
+
+  /** 從暫存區、背景解調與合併工作中移除這些封包 */
+  private forget(list: Demod[]): void {
+    const set = new Set(list);
+    for (const d of list) this.store.remove(d);
+    this.background = this.background.filter((d) => !set.has(d));
+    this.jobs = this.jobs.filter((j) => !set.has(j.cur) && !set.has(j.other));
+  }
+
+  /**
+   * 解碼成功後，找出暫存區中「同一則廣播」的失敗封包並移除：
+   * 以成功的 payload 重新產生符號序列，和失敗封包已判定的符號比對，一半以上相同即視為同一則。
+   */
+  private forgetMatching(payload: number[]): void {
+    if (!this.store.size) return;
+    const expected = frameSymbols(payload, this.cfg);
+    const same: Demod[] = [];
+    for (const e of this.store.all()) {
+      let cmp = 0;
+      let eq = 0;
+      for (let j = PREAMBLE.length; j < expected.length && j < e.d.dec.length; j++) {
+        const dec = e.d.dec[j];
+        if (!dec) continue;
+        cmp++;
+        if (DATA_BASE + dec.value === expected[j]) eq++;
+      }
+      if (cmp >= 4 && eq * 2 >= cmp) same.push(e.d);
+    }
+    if (same.length) this.forget(same);
   }
 
   /** 背景解調失敗封包（樣本到了就算），並執行已就緒的合併工作 */
@@ -684,11 +714,8 @@ export class Receiver {
       const b = this.bodySymbols(job.other, S).map(normalizePowers);
       const r = this.tryRs(combineSymbols(a, b), job.reserve);
       if (r) {
-        this.store.remove(job.cur);
-        this.store.remove(job.other);
-        // 同一對封包的其他工作取消
-        const done = new Set([job.cur, job.other]);
-        this.jobs = this.jobs.filter((j) => j !== job && !done.has(j.cur) && !done.has(j.other));
+        this.forget([job.cur, job.other]);
+        this.forgetMatching(r.data);
         this.emit(job.cur, S, r, true);
         return;
       }
@@ -743,11 +770,8 @@ export class Receiver {
     const reserve = this.lenSoft ? NOISE.erasureReserve : 0;
     const r = this.tryRs(this.bodySymbols(d, S), reserve);
     if (r) {
-      if (this.opts.combining) {
-        // 成功了：暫存的失敗封包多半是同一則廣播的前一次傳送，不必再合併
-        this.store.clear();
-        this.jobs = [];
-      }
+      // 只移除「看起來是同一則廣播」的失敗封包；其他廣播（例如另一個月台）的失敗封包仍保留等待合併
+      if (this.opts.combining) this.forgetMatching(r.data);
       this.emit(d, S, r, false);
     } else {
       this.stats.fail++;
@@ -807,7 +831,7 @@ export class Receiver {
 
 /**
  * 封包內頻道白化：以「該頻道在整個封包中功率的低百分位數」估計各頻道的背景（噪音＋持續性干擾），
- * 再把功率除以背景。資料音只在約 1/16 的符號出現，所以低百分位數幾乎不受訊號影響；
+ * 再扣除高出噪音底的部分。資料音只在約 1/16 的符號出現，所以低百分位數幾乎不受訊號影響；
  * 某個頻率附近若有設備的持續性窄頻雜音，它的背景值會很高，因而被壓下來。
  */
 export function whiten(data: Float64Array[], _detector?: SymbolDetector): void {

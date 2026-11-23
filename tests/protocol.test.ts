@@ -5,6 +5,7 @@ import {
   ProtocolError,
   decodeMessage,
   encodeMessage,
+  isNewerPack,
   truncateUtf8,
   utf8Length,
   type Message,
@@ -66,9 +67,18 @@ describe('協定 v2', () => {
     expect(() => encodeMessage({ type: 'text', stationId: 1, platform: 1, seq: 1, text: '' })).toThrow(
       ProtocolError,
     );
-    // 中文 3 bytes：14 個字 = 42 bytes，第 15 個字會超過
+    // 中文 3 bytes：14 個字 = 42 bytes，第 15 個字會超過 44
     expect(utf8Length(truncateUtf8('測'.repeat(20)))).toBe(42);
     expect(truncateUtf8('ab測', 4)).toBe('ab');
+  });
+
+  it('packVersion 循環比較：255 之後回到 0 仍判斷為較新', () => {
+    expect(isNewerPack(2, 1)).toBe(true);
+    expect(isNewerPack(1, 1)).toBe(false);
+    expect(isNewerPack(1, 2)).toBe(false);
+    expect(isNewerPack(0, 255)).toBe(true);
+    expect(isNewerPack(3, 250)).toBe(true);
+    expect(isNewerPack(250, 3)).toBe(false);
   });
 
   it('解碼時拒絕錯誤的版本、型別、長度與 UTF-8', () => {

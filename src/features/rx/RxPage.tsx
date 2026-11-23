@@ -1,5 +1,5 @@
 /**
- * 乘客端（#/rx）：一鍵啟動接收 → 離線 HMAC 驗證＋雙包緊急鎖 → 自動語系字幕看板。
+ * 乘客端（#/rx）：一鍵開始接收 → 字幕看板（依手機語言自動選字幕語言）、月台判斷、緊急畫面、歷史紀錄。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { WithData, type AppData } from '../../app/data.tsx';
@@ -8,9 +8,8 @@ import { ReceiverPipeline } from '../../audio/receiverPipeline.ts';
 import type { LevelInfo, RxMode, WorkerFailure, WorkerMessage } from '../../audio/protocol.ts';
 import { LANG_LABELS, LANG_TAGS, LANGS, type Lang } from '../../data/schema.ts';
 import { UI } from '../../i18n/index.ts';
-import { getAuthKey } from '../../modem/auth.ts';
 import { CANDIDATES, LOW_BAND_F0, MODES, type ModemConfig } from '../../modem/config.ts';
-import { EmergencyAlertGuard, ProtocolError, decodeSignedMessage } from '../../modem/protocol.ts';
+import { ProtocolError, decodeMessage, isNewerPack } from '../../modem/protocol.ts';
 import {
   keepScreenOn,
   loadSetting,
@@ -77,7 +76,7 @@ function Rx({ data }: { data: AppData }) {
   const [emergency, setEmergency] = useState<Announcement | null>(null);
   const [packOutdated, setPackOutdated] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [counts, setCounts] = useState({ ok: 0, fail: 0, blocked: 0 });
+  const [counts, setCounts] = useState({ ok: 0, fail: 0 });
 
   const [inbox] = useState(() => {
     const ib = new Inbox();
@@ -96,7 +95,6 @@ function Rx({ data }: { data: AppData }) {
   );
   const pipeline = useRef<ReceiverPipeline | null>(null);
   const releaseWake = useRef<(() => void) | null>(null);
-  const emergencyGuard = useRef(new EmergencyAlertGuard());
 
   const setPlatformMode = (platformMode: 'auto' | 'manual', manualPlatform = settings.manualPlatform) => {
     inbox.setPlatformMode(platformMode, manualPlatform);
@@ -113,36 +111,24 @@ function Rx({ data }: { data: AppData }) {
   const translator = useMemo(() => new PackTranslator(data.pack, station), [data.pack, station]);
 
   const onEvent = useCallback(
-    async (e: WorkerMessage | WorkerFailure) => {
+    (e: WorkerMessage | WorkerFailure) => {
       if (!e.ok) {
         setCounts((c) => ({ ...c, fail: c.fail + 1 }));
         return;
       }
       let msg;
       try {
-        msg = await decodeSignedMessage(Uint8Array.from(e.payload));
+        msg = decodeMessage(e.payload);
       } catch (err) {
-        if (err instanceof ProtocolError) {
-          console.warn('[Security] 攔截無效或過期廣播:', err.message);
-          setCounts((c) => ({ ...c, fail: c.fail + 1, blocked: c.blocked + 1 }));
-        }
+        if (err instanceof ProtocolError) setCounts((c) => ({ ...c, fail: c.fail + 1 }));
         return;
       }
 
       const tpl =
         msg.type === 'template' ? data.pack.templates.find((x) => x.id === msg.templateId) : undefined;
-      if (msg.type === 'template' && msg.packVersion > data.pack.packVersion) setPackOutdated(true);
+      if (msg.type === 'template' && isNewerPack(msg.packVersion, data.pack.packVersion))
+        setPackOutdated(true);
       const emergencyMsg = tpl?.category === 'emergency';
-
-      // Platform = 0（全站緊急覆蓋）必須在進入 inbox 去重前通過雙包驗證鎖
-      const tplId = msg.type === 'template' ? msg.templateId : -1;
-      const isConfirmed = emergencyGuard.current.confirmPacket(msg.platform, msg.seq, tplId);
-      if (!isConfirmed) {
-        setNotice('偵測到全站緊急警報首包，等待第二包雙重驗證確認…');
-        return;
-      }
-
-      setNotice(null);
       setCounts((c) => ({ ...c, ok: c.ok + 1 }));
       const r = inbox.receive(
         msg,
@@ -153,7 +139,7 @@ function Rx({ data }: { data: AppData }) {
       if (r.status === 'new' && r.announcement?.shown) {
         setLatest(r.announcement);
         setFlash((f) => f + 1);
-        if (emergencyMsg || msg.platform === 0) {
+        if (emergencyMsg) {
           setEmergency(r.announcement);
           vibrate(VIBRATE_EMERGENCY);
         } else {
@@ -168,14 +154,10 @@ function Rx({ data }: { data: AppData }) {
   const start = async () => {
     setError(null);
     setStarting(true);
-    // 預載 IndexedDB 不可匯出金鑰（離線驗票用）
-    void getAuthKey();
     const mode: RxMode =
       settings.band < 0 ? { kind: 'auto' } : { kind: 'manual', cfg: CANDIDATES[settings.band] };
     const p = new ReceiverPipeline({
-      onEvent: (ev) => {
-        void onEventRef.current(ev);
-      },
+      onEvent: (ev) => onEventRef.current(ev),
       onLevel: setLevel,
       onLock: setLocked,
       onError: (m) => setError(m),
@@ -250,8 +232,25 @@ function Rx({ data }: { data: AppData }) {
       ) : (
         <div className="card stack">
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span className="ok">● 正在離線聆聽月台廣播（HMAC 防偽驗證已啟用）</span>
+            <span className="ok">● {t.listening}</span>
             <button onClick={stop}>{t.stop}</button>
+          </div>
+          {/* 月台判斷與收訊狀態固定顯示在主畫面（需求第 4 節）；工程數據在「進階」 */}
+          <div className="status" aria-label={t.statusLabel} data-testid="status">
+            <span data-testid="platform-status">
+              <b>
+                {settings.platformMode === 'auto'
+                  ? t.platformAuto(curPlatform)
+                  : t.platformManual(settings.manualPlatform)}
+              </b>
+            </span>
+            <span>
+              {t.station}：
+              <b>{station ? station.name[settings.lang] : (view.stationId ?? t.unknownStation)}</b>
+            </span>
+            <span>
+              {t.band}：<b data-testid="band">{bandText}</b>
+            </span>
           </div>
           <p className="small muted" style={{ margin: 0 }}>
             {t.keepOpen}
@@ -323,34 +322,17 @@ function Rx({ data }: { data: AppData }) {
         </div>
       </div>
 
-      {/* 折疊式工程與進階設定：保持一般使用者介面簡潔，同時保留完整 Demo 監控數據 */}
+      {/* 折疊式進階設定與工程數據：讓一般乘客的畫面保持簡潔 */}
       <details className="card" style={{ marginTop: 14 }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>進階與工程狀態（頻段、月台鎖定、防偽計數）</summary>
+        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{t.advanced}</summary>
         <div className="stack" style={{ marginTop: 12 }}>
           {running && (
-            <div className="status" aria-label="接收狀態" data-testid="status">
-              <span>
-                {t.band}：<b data-testid="band">{bandText}</b>
-              </span>
-              <span>
-                {t.station}：
-                <b>{station ? station.name[settings.lang] : (view.stationId ?? t.unknownStation)}</b>
-              </span>
-              <span data-testid="platform-status">
-                {t.platform}：
-                <b>
-                  {settings.platformMode === 'auto'
-                    ? t.platformAuto(curPlatform)
-                    : t.platformManual(settings.manualPlatform)}
-                </b>
-              </span>
+            <div className="status">
               <span>
                 {t.sync}：<b>{(level?.score ?? 0).toFixed(2)}</b>
               </span>
               <span>
-                <b>
-                  {t.okFail(counts.ok, counts.fail)}（攔截偽造/過期：{counts.blocked}）
-                </b>
+                <b>{t.okFail(counts.ok, counts.fail)}</b>
               </span>
             </div>
           )}

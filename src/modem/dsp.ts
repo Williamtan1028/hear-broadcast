@@ -39,6 +39,58 @@ export function goertzel(x: Float32Array, coef: number): number {
 }
 
 /**
+ * 分段累積的合併方式（解碼窗切成 S 段，各段 Goertzel 的複數輸出 y_m）：
+ *  - 'split'：Σ|y_m|²，平方律（非同調）合併，各段相位完全不管
+ *  - 'egc'：(Σ|y_m|)²，等增益合併＝在「各段之間相位任意」假設下的最大似然（GLRT）；
+ *    訊號穩定時與整窗同調只差約 2.5 dB（split 差 3 dB），相位反轉時與 split 一樣不會抵銷
+ *  - 'coherent'：|Σ y_m e^{jωL(S−1−m)}|²，等同整窗 Goertzel（同調）
+ *  - 'mix'：(coherent + egc) / 2。訊號穩定時兩者相同（同調的積分增益），符號中途相位反轉時
+ *    同調項抵銷、egc 項保留一半；實測在強噪音與移動衰落下都最好（docs/benchmarks.md 3.6）
+ */
+export type AccumMetric = 'split' | 'egc' | 'coherent' | 'mix';
+
+/**
+ * 分段 Goertzel：把 x 切成 segs 段，依 metric 合併各段在角頻率 w（rad/樣本）的功率。
+ * segs = 1 時就是一般的 Goertzel。
+ */
+export function segmentedPower(x: Float32Array, w: number, segs: number, metric: AccumMetric): number {
+  const c = Math.cos(w);
+  const coef = 2 * c;
+  if (segs <= 1) return goertzel(x, coef);
+  const sn = Math.sin(w);
+  const L = Math.floor(x.length / segs);
+  const rc = Math.cos(w * L);
+  const rs = Math.sin(w * L);
+  let sumP = 0;
+  let sumA = 0;
+  let Yr = 0;
+  let Yi = 0;
+  for (let m = 0; m < segs; m++) {
+    let s1 = 0;
+    let s2 = 0;
+    for (let i = m * L, e = i + L; i < e; i++) {
+      const s0 = x[i] + coef * s1 - s2;
+      s2 = s1;
+      s1 = s0;
+    }
+    // y = s1 − e^{−jw}·s2 = Σ x[k]·e^{jw(段尾 − k)}
+    const yr = s1 - c * s2;
+    const yi = sn * s2;
+    const p = yr * yr + yi * yi;
+    sumP += p;
+    sumA += Math.sqrt(p);
+    // Horner：Y ← Y·e^{jwL} + y_m（以整窗窗尾為相位參考）
+    const t = Yr * rc - Yi * rs + yr;
+    Yi = Yr * rs + Yi * rc + yi;
+    Yr = t;
+  }
+  if (metric === 'split') return sumP;
+  if (metric === 'egc') return sumA * sumA;
+  if (metric === 'mix') return (Yr * Yr + Yi * Yi + sumA * sumA) / 2;
+  return Yr * Yr + Yi * Yi;
+}
+
+/**
  * 基 2 FFT（就地運算、複數）。用於都卜勒頻偏搜尋：一次 FFT 可同時得到所有頻偏下各頻道的功率，
  * 比對每個頻偏都跑 Goertzel 省下一個數量級的計算。
  */

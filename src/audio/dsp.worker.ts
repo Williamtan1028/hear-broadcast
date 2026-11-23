@@ -3,6 +3,7 @@
  */
 import { AutoReceiver } from '../modem/autoReceiver.ts';
 import { DEFAULT_OPTIONS } from '../modem/config.ts';
+import { decodeMessage } from '../modem/protocol.ts';
 import type { FeatureRow, FromWorker, ToWorker, WorkerFailure, WorkerMessage } from './protocol.ts';
 
 // Worker 全域範圍（app 的 tsconfig 使用 DOM lib，這裡只宣告用到的部分）
@@ -35,6 +36,15 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         rx = new AutoReceiver(fs, {
           opts: { ...DEFAULT_OPTIONS, ...m.opts },
           manual: m.mode.kind === 'manual' ? m.mode.cfg : undefined,
+          // 只有合法的協定 v2 封包才算成功、才會鎖定頻段
+          accept: (p) => {
+            try {
+              decodeMessage(p);
+              return true;
+            } catch {
+              return false;
+            }
+          },
           onEvent: (ev) => {
             const at = rx ? rx.buffer.total / fs : 0;
             const event: WorkerMessage | WorkerFailure = ev.ok

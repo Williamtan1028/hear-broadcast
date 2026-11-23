@@ -3,7 +3,7 @@
  *   A：第 1 月台「列車即將進站」（強訊號，模擬手機靠近第 1 月台喇叭）
  *   B：第 2 月台「列車延誤」（弱訊號，模擬遠處第 2 月台的喇叭）
  *   C：全站緊急疏散（往 2 號出口）
- * 背景加上微弱白噪音。輸出 e2e/fixtures/broadcast.wav（48 kHz 單聲道 16-bit）。
+ * 背景加上白噪音（σ = 0.01），讓遠處月台的訊號品質明顯較低。輸出 e2e/fixtures/broadcast.wav（48 kHz 單聲道 16-bit）。
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { makeRng, gauss } from '../bench/channel.ts';
@@ -37,7 +37,7 @@ export const E2E_MESSAGES: { msg: Message; amp: number }[] = [
       p1: 7,
       p2: 10,
     },
-    amp: 0.03,
+    amp: 0.006,
   },
   {
     msg: {
@@ -58,8 +58,12 @@ export function makeE2eWav(): Uint8Array {
   const fs = 48000;
   const parts: Float32Array[] = [new Float32Array(fs)];
   for (const { msg, amp } of E2E_MESSAGES) {
-    parts.push(synthesize(encodeMessage(msg), DEFAULTS, fs, amp));
-    parts.push(new Float32Array(Math.round(fs * 1.5)));
+    // 和站務端的預設一樣，每則送兩次（相同 seq）：弱訊號靠重送／合併收到，接收端去重
+    const sig = synthesize(encodeMessage(msg), DEFAULTS, fs, amp);
+    for (let r = 0; r < 2; r++) {
+      parts.push(sig);
+      parts.push(new Float32Array(Math.round(fs * 1.5)));
+    }
   }
   parts.push(new Float32Array(fs * 2));
   const n = parts.reduce((s, p) => s + p.length, 0);
@@ -70,7 +74,8 @@ export function makeE2eWav(): Uint8Array {
     o += p.length;
   }
   const rng = makeRng(2024);
-  for (let i = 0; i < n; i++) x[i] += 0.002 * gauss(rng);
+  // 背景噪音要夠明顯，遠處月台的弱訊號品質才會穩定低於近處月台（無噪音時兩者品質幾乎相同，判斷會因機器而異）
+  for (let i = 0; i < n; i++) x[i] += 0.01 * gauss(rng);
   return encodeWav([x], fs);
 }
 

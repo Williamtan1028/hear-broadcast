@@ -21,12 +21,15 @@ import {
   SCENARIOS,
   SCENARIO_LABELS,
   channel,
+  handJitter,
   makeRng,
   walkingVelocity,
   type ChannelOptions,
 } from './channel.ts';
 import { GG_PROTOCOLS, ggDecode, ggEncode, loadGgwave, randomText } from './ggwave.ts';
-import { runTrials, type TrialSpec } from './trial.ts';
+import { runTrial, runTrials, type TrialSpec } from './trial.ts';
+import { RX } from '../src/modem/config.ts';
+import type { AccumMetric } from '../src/modem/dsp.ts';
 
 const N = Number(process.env.BENCH_N ?? 30);
 const out: string[] = [];
@@ -61,6 +64,7 @@ function sectionOpts(): void {
     ['＋都卜勒（含追蹤）', { ...BASELINE_OPTIONS, doppler: true, tracking: true }],
     ['＋軟判決／抹除', { ...BASELINE_OPTIONS, erasure: true }],
     ['＋頻道白化', { ...BASELINE_OPTIONS, whitening: true }],
+    ['＋分段累積', { ...BASELINE_OPTIONS, accumulation: true }],
     ['預設（全部開啟）', DEFAULT_OPTIONS],
   ];
   for (const ts of [MODES.standard, MODES.stable]) {
@@ -234,6 +238,80 @@ async function sectionGgwave(): Promise<void> {
   }
 }
 
+/**
+ * 分段累積的 A/B（3.6 節）：解碼窗長度 × 分段數 × 合併方式，同一組種子逐次配對比較。
+ * 含「移動多路徑衰落」情境（每條反射路徑各自的都卜勒）。
+ */
+function sectionAccum(): void {
+  const n = Number(process.env.BENCH_ACCUM_N ?? 150);
+  // RX 是 as const；A/B 時暫時改寫，結束後還原
+  const rx = RX as unknown as { symWinLenAccum: number; accumSegments: number; accumMetric: AccumMetric };
+  const saved = { len: rx.symWinLenAccum, segs: rx.accumSegments, metric: rx.accumMetric };
+  const variants: [string, boolean, number, number, AccumMetric][] = [
+    ['關（0.75 窗，PoC）', false, 0.75, 1, 'coherent'],
+    ['0.9 窗、2 段平方律（William 原版）', true, 0.9, 2, 'split'],
+    ['1.0 窗、整窗同調', true, 1.0, 1, 'coherent'],
+    ['1.0 窗、2 段等增益', true, 1.0, 2, 'egc'],
+    ['**1.0 窗、2 段混合（預設）**', true, 1.0, 2, 'mix'],
+  ];
+  const scen: [string, (r: () => number) => ChannelOptions][] = [
+    ['強', () => SCENARIOS.strong],
+    ['極強', () => SCENARIOS.extreme],
+    ['高頻衰減＋中等', () => SCENARIOS.hfMedium],
+    ['中等＋窄頻干擾', () => ({ ...SCENARIOS.medium, tones: TONES })],
+    [
+      '中等＋手持微動（多路徑衰落）',
+      (r) => ({ ...SCENARIOS.medium, velocity: handJitter(r), multipathMotion: true }),
+    ],
+    [
+      '極強＋手持微動（多路徑衰落）',
+      (r) => ({ ...SCENARIOS.extreme, velocity: handJitter(r), multipathMotion: true }),
+    ],
+    [
+      '強＋走路（多路徑衰落）',
+      (r) => ({ ...SCENARIOS.strong, velocity: walkingVelocity(r), multipathMotion: true }),
+    ],
+    [
+      '極強＋走路（多路徑衰落）',
+      (r) => ({ ...SCENARIOS.extreme, velocity: walkingVelocity(r), multipathMotion: true }),
+    ],
+  ];
+  log(`
+#### 標準模式、其他優化全開、48 kHz → 44.1 kHz，每格 ${n} 次（括號：對 William 原版逐次配對的 +贏／−輸）
+`);
+  log(`| 情境 | ${variants.map((v) => v[0]).join(' | ')} |`);
+  log(`|---|${variants.map(() => '---').join('|')}|`);
+  for (const [label, mk] of scen) {
+    const res = variants.map(([, acc, len, segs, metric]) => {
+      rx.symWinLenAccum = len;
+      rx.accumSegments = segs;
+      rx.accumMetric = metric;
+      return Array.from(
+        { length: n },
+        (_, i) =>
+          runTrial({
+            cfg: DEFAULTS,
+            ch: mk(makeRng(90_000 + i)),
+            opts: { ...DEFAULT_OPTIONS, accumulation: acc },
+            rng: makeRng(60_000 + i),
+          }).ok,
+      );
+    });
+    const ref = res[1];
+    const cells = res.map((r, k) => {
+      const ok = r.filter(Boolean).length;
+      if (k === 1) return `${ok}`;
+      const win = r.filter((v, i) => v && !ref[i]).length;
+      const lose = r.filter((v, i) => !v && ref[i]).length;
+      return `${ok}（+${win}／−${lose}）`;
+    });
+    log(`| ${label} | ${cells.join(' | ')} |`);
+  }
+  rx.symWinLenAccum = saved.len;
+  rx.accumSegments = saved.segs;
+  rx.accumMetric = saved.metric;
+}
+
 /** 效能 */
 function sectionPerf(): void {
   log('\n#### AutoReceiver 處理 10 秒音訊的時間（Node，8 組候選設定）\n');
@@ -241,7 +319,7 @@ function sectionPerf(): void {
   log('|---|---|---|---|');
   for (const [name, o] of [
     ['baseline（Goertzel，每組 6 頻道）', BASELINE_OPTIONS],
-    ['預設（共用 FFT＋±120 Hz 頻偏搜尋）', DEFAULT_OPTIONS],
+    ['預設（共用 FFT＋±150 Hz 頻偏搜尋）', DEFAULT_OPTIONS],
   ] as const) {
     const cells: string[] = [];
     let ffts = 0;
@@ -263,6 +341,7 @@ const sections: Record<string, () => void | Promise<void>> = {
   opts: sectionOpts,
   doppler: sectionDoppler,
   combining: sectionCombining,
+  accum: sectionAccum,
   ggwave: sectionGgwave,
   perf: sectionPerf,
 };

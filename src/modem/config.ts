@@ -5,6 +5,8 @@
  *   i = 0 同步音 A、i = 1 同步音 B、i = 2..17 資料音（代表 0x0～0xF）。
  */
 
+import type { AccumMetric } from './dsp.ts';
+
 /** 一組調變設定 */
 export interface ModemConfig {
   /** 第 0 個頻道（同步音 A）的頻率，Hz */
@@ -86,8 +88,17 @@ export const RX = {
   threshold: 0.3,
   /** 解碼窗起點（符號內比例） */
   symWinStart: 0.2,
-  /** 解碼窗長度（符號比例） */
-  symWinLen: 0.9,
+  /** 解碼窗長度（符號比例，PoC） */
+  symWinLen: 0.75,
+  /** 分段累積時的解碼窗長度（符號比例；0.2～1.2，窗尾延伸到下一個符號的滑音區，A/B 見 benchmarks 3.6） */
+  symWinLenAccum: 1.0,
+  /** 分段累積：解碼窗切成幾段各自算功率再相加 */
+  accumSegments: 2,
+  /**
+   * 分段累積的合併方式（見 dsp.ts `AccumMetric`）。整窗套 Hann 後再切段；
+   * 「每段各自套 Hann」已 A/B 過（較差），不再保留。依 docs/benchmarks.md 3.6 的結果選擇。
+   */
+  accumMetric: 'mix' as AccumMetric,
   /** 精細對齊搜尋範圍（±符號比例） */
   alignRange: 0.25,
   /** 精細對齊步長（秒） */
@@ -118,7 +129,7 @@ export const AUTO = {
 export const DOPPLER = {
   /** 聲速 m/s */
   soundSpeed: 343,
-  /** 偵測階段的頻偏搜尋範圍 ±Hz（放寬至 180 Hz，支援約 3.0 m/s 快速步行） */
+  /** 偵測階段的頻偏搜尋範圍 ±Hz（150 Hz 在 19.5 kHz 約對應 2.6 m/s 快走） */
   maxShiftHz: 150,
   /** 偵測階段頻偏搜尋的步長上限（Hz）；實際步長是 FFT bin 寬度 */
   coarseStepHz: 12,
@@ -162,6 +173,11 @@ export const LEAKAGE = {
 /** 接收端可開關的優化選項 */
 export interface RxOptions {
   /**
+   * 分段累積：解碼窗從 0.75 加長到 1.0 個符號並切成 2 段，以「同調＋等增益」混合合併兩段（RX.accumMetric）。
+   * 加長的窗提高積分增益；手機移動穿過駐波節點、兩段相位相反時，等增益項不會互相抵銷。
+   */
+  accumulation: boolean;
+  /**
    * 低 SNR 偵測：以「同步音功率 / 頻道背景噪音」取代「同步音占 18 頻道總功率的比例」，
    * 讓訊號弱、只比噪音高幾 dB 時也能觸發（需要 FFT 前端）
    */
@@ -180,6 +196,7 @@ export interface RxOptions {
 
 /** PoC 基準版本：全部關閉 */
 export const BASELINE_OPTIONS: RxOptions = {
+  accumulation: false,
   snrDetect: false,
   doppler: false,
   tracking: false,
@@ -190,6 +207,7 @@ export const BASELINE_OPTIONS: RxOptions = {
 
 /** 預設採用的優化（依 docs/benchmarks.md 的數據決定） */
 export const DEFAULT_OPTIONS: RxOptions = {
+  accumulation: true,
   snrDetect: true,
   doppler: true,
   tracking: true,

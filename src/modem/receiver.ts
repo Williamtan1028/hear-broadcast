@@ -31,7 +31,7 @@ import {
 import { defaultDetector, type SymbolDecision, type SymbolDetector } from './detectors/index.ts';
 import { buildOffsetTable, offsetToAlpha, parabolicPeak, type OffsetTable } from './doppler.ts';
 import { SampleBuffer, SpectrumCache } from './buffer.ts';
-import { goertzel, goertzelCoef } from './dsp.ts';
+import { goertzel, goertzelCoef, segmentedPower } from './dsp.ts';
 import { channelFreqs, frameSymbols, symbolSamples } from './fsk.ts';
 import { RsError, rsDecode, type RsDecodeResult } from './rs.ts';
 
@@ -165,8 +165,6 @@ export class Receiver {
   private readonly symOff: number;
   /** 解碼窗分幾段累積（1 = 整窗，PoC） */
   private readonly segments: number;
-  /** 各段分別加窗時，每段的視窗（追蹤探測時重複使用） */
-  private readonly segWins: Float32Array[];
   private readonly maxSymbols: number;
   private hist: { a: Float64Array[]; b: Float64Array[]; za: Float64Array[]; zb: Float64Array[] } = {
     a: [],
@@ -209,10 +207,6 @@ export class Receiver {
     this.symLen = Math.round((this.opts.accumulation ? RX.symWinLenAccum : RX.symWinLen) * this.N);
     this.symOff = Math.round(RX.symWinStart * this.N);
     this.segments = this.opts.accumulation ? RX.accumSegments : 1;
-    this.segWins = Array.from(
-      { length: this.segments },
-      () => new Float32Array(Math.floor(this.symLen / this.segments)),
-    );
     this.maxSymbols = HEADER_SYMBOLS + 2 * (this.cfg.maxLen + this.cfg.nsym);
     this.ownsBuffer = !init.buffer;
     this.buffer = init.buffer ?? new SampleBuffer(fs);
@@ -423,42 +417,17 @@ export class Receiver {
 
   // ---------------- 解調 ----------------
 
-  /** 將視窗切成多段各自計算 Goertzel 功率並累加（避免移動跨越駐波死角時相位反轉自我抵銷） */
-  private slicedGoertzel(x: Float32Array, coef: number, slices: number): number {
-    if (slices <= 1) return goertzel(x, coef);
-    const subLen = Math.floor(x.length / slices);
-    let sum = 0;
-    for (let s = 0; s < slices; s++) {
-      sum += goertzel(x.subarray(s * subLen, (s + 1) * subLen), coef);
-    }
-    return sum;
-  }
-
   /** 計算從 start 開始一個解碼窗內，在伸縮比例 alpha 下 18 個頻道的功率 */
   private symbolPowersAt(start: number, alpha: number): Float64Array {
     const P = new Float64Array(NT);
-    const coefs = alpha === 1 ? this.coefAll : this.F.map((f) => goertzelCoef(f * alpha, this.fs));
-    if (this.segments > 1 && RX.accumWindow === 'segment') {
-      // 每段各自加 Hann 窗後算功率再相加
-      const L = this.segWins[0].length;
-      for (let sgm = 0; sgm < this.segments; sgm++)
-        this.buffer.windowed(start + sgm * L, L, this.segWins[sgm]);
-      for (let i = 0; i < NT; i++) P[i] = this.segmentPower(coefs[i]);
-      return P;
-    }
-    const x = this.buffer.windowed(start, this.symLen, this.symWin);
-    for (let i = 0; i < NT; i++) P[i] = this.slicedGoertzel(x, coefs[i], this.segments);
+    this.buffer.windowed(start, this.symLen, this.symWin);
+    for (let i = 0; i < NT; i++) P[i] = this.windowPower(this.F[i] * alpha);
     return P;
   }
 
-  /** 最近一次 symbolPowersAt 的視窗中，頻率係數 coef 的功率（追蹤探測用，與解調使用相同的分段方式） */
-  private segmentPower(coef: number): number {
-    if (this.segments > 1 && RX.accumWindow === 'segment') {
-      let sum = 0;
-      for (const w of this.segWins) sum += goertzel(w, coef);
-      return sum;
-    }
-    return this.slicedGoertzel(this.symWin, coef, this.segments);
+  /** 最近一次 symbolPowersAt 的視窗中，頻率 f 的功率（解調與追蹤探測使用相同的分段方式） */
+  private windowPower(f: number): number {
+    return segmentedPower(this.symWin, (2 * Math.PI * f) / this.fs, this.segments, RX.accumMetric);
   }
 
   /** 符號 j 在起點 p、伸縮比例 alpha 下的解碼窗起點 */
@@ -553,8 +522,8 @@ export class Receiver {
       // symbolPowersAt 剛填好的視窗
       const fc = this.F[ch] * d.alpha;
       const h = DOPPLER.trackProbeHz;
-      const pm = this.segmentPower(goertzelCoef(fc - h, this.fs));
-      const pp = this.segmentPower(goertzelCoef(fc + h, this.fs));
+      const pm = this.windowPower(fc - h);
+      const pp = this.windowPower(fc + h);
       const delta = parabolicPeak(pm, P[ch], pp) * h;
       const measured = (fc + delta) / this.F[ch];
       d.alpha += DOPPLER.trackGain * (measured - d.alpha);

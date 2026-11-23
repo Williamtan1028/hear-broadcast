@@ -48,6 +48,13 @@ export interface ChannelOptions {
   lead?: number;
   /** 是否加入 300 Hz 低頻干擾（PoC 預設有） */
   lowHum?: boolean;
+  /**
+   * 多路徑各自的都卜勒（移動造成的衰落）：每條反射路徑有隨機入射角 θ，手機移動時
+   * 反射路徑長度的變化是直達路徑的 cos θ 倍。20 kHz 波長只有 1.7 cm，移動幾公釐
+   * 直達與反射的相位關係就改變，形成符號內的振幅起伏與相位反轉（駐波節點）。
+   * 不給或 false 時所有路徑共用同一個都卜勒（舊模型，數字與之前相同）。
+   */
+  multipathMotion?: boolean;
 }
 
 /** 線性內插重新取樣（PoC 相同的做法），pos(i) 給出輸出第 i 點在輸入中的位置 */
@@ -110,6 +117,8 @@ export function channel(
     s = s.map((v) => f2(f1(v)));
   }
   const x = resampleDoppler(s, fsTx, fsRx, o.velocity ?? 0);
+  // 手機沿直達路徑的累積位移（公尺），用來計算各反射路徑相對直達路徑的延遲變化
+  const disp = o.multipathMotion && o.velocity ? displacement(o.velocity, x.length, fsRx) : null;
   const lead = Math.round(fsRx * (o.lead ?? 0.3 + rng()));
   const tail = Math.round(fsRx * 0.5);
   const y = new Float32Array(lead + x.length + tail + Math.round(fsRx * o.rt));
@@ -121,11 +130,24 @@ export function channel(
       (o.rev * gauss(rng) * Math.exp((-6.9 * d) / o.rt)) / Math.sqrt(30),
     ]);
   }
-  for (const [d, g] of taps) {
+  for (let k = 0; k < taps.length; k++) {
+    const [d, g] = taps[k];
     if (g === 0) continue;
     const gg = g * o.gain;
     const off = lead + d;
-    for (let i = 0; i < x.length; i++) y[off + i] += x[i] * gg;
+    if (!disp || k === 0) {
+      for (let i = 0; i < x.length; i++) y[off + i] += x[i] * gg;
+      continue;
+    }
+    // 反射路徑：入射角 θ 隨機，相對直達路徑多出 disp × (1 − cos θ) / c 的延遲
+    const scale = ((1 - Math.cos(rng() * Math.PI)) * fsRx) / DOPPLER.soundSpeed;
+    for (let i = 0; i < x.length; i++) {
+      const pos = i - disp[i] * scale;
+      const a = Math.floor(pos);
+      if (a < 0 || a + 1 >= x.length) continue;
+      const f = pos - a;
+      y[off + i] += (x[a] * (1 - f) + x[a + 1] * f) * gg;
+    }
   }
   const hum = o.lowHum ?? true;
   for (let i = 0; i < y.length; i++) {
@@ -140,6 +162,17 @@ export function channel(
     }
   }
   return y;
+}
+
+/** 速度 v(t) 積分得到每個樣本時的累積位移（公尺） */
+function displacement(velocity: number | ((t: number) => number), n: number, fs: number): Float64Array {
+  const p = new Float64Array(n);
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    p[i] = acc;
+    acc += (typeof velocity === 'number' ? velocity : velocity(i / fs)) / fs;
+  }
+  return p;
 }
 
 /** 標準情境（第 8 節） */
@@ -164,6 +197,21 @@ export const SCENARIO_LABELS: Record<ScenarioName, string> = {
   hfMedium: '高頻衰減＋中等',
   hfStrong: '高頻衰減＋強',
 };
+
+/**
+ * 手持微動：站著拿手機，手的晃動約 ±0.05～0.15 m/s、週期 0.8～2 秒。
+ * 一個符號（60 ms）內移動數公釐，接近 20 kHz 的半個波長，足以讓多路徑相位反轉。
+ */
+export function handJitter(rng: Rng): (t: number) => number {
+  const a1 = 0.05 + 0.1 * rng();
+  const a2 = 0.03 + 0.05 * rng();
+  const p1 = 0.8 + 1.2 * rng();
+  const p2 = 0.3 + 0.4 * rng();
+  const ph1 = rng() * 2 * Math.PI;
+  const ph2 = rng() * 2 * Math.PI;
+  return (t: number) =>
+    a1 * Math.sin((2 * Math.PI * t) / p1 + ph1) + a2 * Math.sin((2 * Math.PI * t) / p2 + ph2);
+}
 
 /** 走路情境：速度在 0.5～1.5 m/s 之間緩慢變化（週期約 3～5 秒），方向隨機 */
 export function walkingVelocity(rng: Rng): (t: number) => number {
